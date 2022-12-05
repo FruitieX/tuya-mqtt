@@ -1,0 +1,20 @@
+[package]
+name = "tuya-mqtt"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+env_logger = "0.9.1"
+rust-async-tuyapi = { git = "https://github.com/FruitieX/rust-async-tuyapi" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "macros", "sync", "signal"] }
+serde = { version = "1.0.117", features = ["derive"] }
+serde_json = "1.0"
+rumqttc = "0.18.0"
+anyhow = "1.0.53"
+palette = { version = "0.5.0", features = ["serializing"] }
+log = "0.4.17"
+futures = "0.3.25"
+serde_path_to_error = "0.1"
+config = "0.10.1"

@@ -1,0 +1,9 @@
+[mqtt]
+id = "tuya-mqtt"
+host = "test.mosquitto.org"
+port = 1883
+
+[devices]
+25266020c44f34eb2a95 = { name = "Lower bathroom downlight 1", version = "3.3", ip = "192.168.1.48", local_key = "21566ab1a6c61134" }
+2526602070019412d1be = { name = "Lower bathroom downlight 2", version = "3.3", ip = "192.168.1.31", local_key = "c24b690d5e1f0ab8" }
+25266020c44f36aa58e7 = { name = "Entryway downlight 1", version = "3.4", ip = "192.168.1.92", local_key = "2ac167c24753c8bf" }
