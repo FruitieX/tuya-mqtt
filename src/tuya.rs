@@ -36,7 +36,7 @@ pub struct TuyaConfig {
     pub devices: HashMap<String, TuyaDeviceConfig>,
 }
 
-type TuyaDps = HashMap<String, serde_json::Value>;
+type TuyaDps = serde_json::Value;
 
 #[derive(Deserialize)]
 struct TuyaThreeFourPayload {
@@ -66,6 +66,8 @@ pub fn tuya_to_mqtt(
         _ => return Err(anyhow!("Unexpected Tuya device state struct")),
     }
     .context("Expected to find dps struct in Tuya response")?;
+
+    let dps: HashMap<String, serde_json::Value> = serde_json::from_value(dps)?;
 
     let power = if let Some(Value::Bool(value)) = dps.get(POWER_ON_FIELD) {
         Some(*value)
@@ -146,7 +148,7 @@ pub fn tuya_to_mqtt(
 }
 
 pub fn mqtt_to_tuya(mqtt_device: MqttDevice) -> TuyaDps {
-    let mut dps = HashMap::new();
+    let mut dps = serde_json::Map::new();
 
     if let Some(power) = mqtt_device.power {
         dps.insert(POWER_ON_FIELD.to_string(), json!(power));
@@ -158,6 +160,10 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice) -> TuyaDps {
         dps.insert(BRIGHTNESS_FIELD.to_string(), json!(tuya_brightness));
     }
 
+    // NOTE: Very important that MODE_FIELD comes last in the dps struct, at
+    // least my Tuya lamps will not set the provided color unless this is the
+    // case. Note also that this is why we need to enable the preserve_order
+    // feature of serde_json.
     if let Some(color) = mqtt_device.color {
         // HSV is represented as a string of i16 hex values
         let hue: f32 = color.hue.to_positive_degrees();
@@ -182,7 +188,7 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice) -> TuyaDps {
         dps.insert(MODE_FIELD.to_string(), json!("white"));
     }
 
-    dps
+    serde_json::Value::Object(dps)
 }
 
 pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient) -> Result<()> {
@@ -201,7 +207,7 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
             let connected = {
                 let mut tuya_device = tuya_device.write().await;
                 debug!("Connecting to {}", device_config.name);
-                let res = timeout(Duration::from_millis(5000), tuya_device.connect()).await;
+                let res = timeout(Duration::from_millis(9000), tuya_device.connect()).await;
                 debug!("Connected to {}", device_config.name);
 
                 match res {
@@ -243,7 +249,7 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                                     uid: Some(device_config.id.to_string()),
                                     t: Some("0".to_string()),
                                     dp_id: None,
-                                    dps: Some(HashMap::new()),
+                                    dps: None,
                                 })),
                             )
                             .await??;
@@ -273,15 +279,19 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
 
                     (|| async move {
                         loop {
-                            let mqtt_rx = mqtt_rx_map.get(&device_config.id).context(format!(
-                                "Could not find configured MQTT device with id {}",
-                                device_config.id
-                            ))?;
-                            let mut mqtt_rx = mqtt_rx.write().await;
-                            let res = mqtt_rx
-                                .recv()
-                                .await
-                                .context("Expected to receive mqtt message from rx channel")?;
+                            let res = {
+                                let mqtt_rx =
+                                    mqtt_rx_map.get(&device_config.id).context(format!(
+                                        "Could not find configured MQTT device with id {}",
+                                        device_config.id
+                                    ))?;
+                                let mut mqtt_rx = mqtt_rx.write().await;
+                                mqtt_rx.changed().await?;
+                                let value = &*mqtt_rx.borrow();
+                                value
+                                    .clone()
+                                    .context("Expected to receive mqtt message from rx channel")?
+                            };
 
                             let dps = mqtt_to_tuya(res);
 
@@ -290,7 +300,7 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                                 .await??;
 
                             // A bug in rust_async_tuyapi causes the next read after set_values to fail
-                            // with invalid payload messages. Make a dummy 
+                            // with invalid payload messages. Make a dummy
                             tuya_device
                                 .set(Payload::Struct(PayloadStruct {
                                     dev_id: device_config.id.to_string(),

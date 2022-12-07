@@ -4,7 +4,7 @@ use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
-    sync::{mpsc::Receiver, RwLock},
+    sync::{watch::Receiver, RwLock},
     task,
 };
 
@@ -26,7 +26,7 @@ pub struct MqttDevice {
 #[derive(Clone)]
 pub struct MqttClient {
     pub client: AsyncClient,
-    pub rx_map: HashMap<String, Arc<RwLock<Receiver<MqttDevice>>>>,
+    pub rx_map: HashMap<String, Arc<RwLock<Receiver<Option<MqttDevice>>>>>,
 }
 
 pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Result<MqttClient> {
@@ -39,14 +39,14 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
     let (client, mut eventloop) = AsyncClient::new(options, 10);
     client
         .subscribe("home/lights/tuya/+/set", QoS::AtMostOnce)
-        .await
-        .unwrap();
+        .await?;
 
     let mut tx_map = HashMap::new();
     let mut rx_map = HashMap::new();
 
     for device in tuya_config.devices.values() {
-        let (tx, rx) = tokio::sync::mpsc::channel(3);
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        let tx = Arc::new(RwLock::new(tx));
         let rx = Arc::new(RwLock::new(rx));
         tx_map.insert(device.id.clone(), tx);
         rx_map.insert(device.id.clone(), rx);
@@ -58,19 +58,15 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
 
             let res = (|| async move {
                 if let rumqttc::Event::Incoming(rumqttc::Packet::Publish(msg)) = notification {
-                    let json: MqttDevice = serde_json::from_slice(&msg.payload)?;
-                    println!("json = {:?}", json);
+                    let device: MqttDevice = serde_json::from_slice(&msg.payload)?;
 
-                    let topic = msg.topic;
-                    let device_id = topic
-                        .split('/')
-                        .nth(3)
-                        .context("Expected subscribed MQTT topic to contain device id at index 3")?;
+                    let device_id = &device.id;
                     let tx = mqtt_tx.get(device_id).context(format!(
                         "Could not find configured MQTT device with id {}",
                         device_id
                     ))?;
-                    tx.try_send(json)?;
+                    let tx = tx.write().await;
+                    tx.send(Some(device))?;
                 }
 
                 Ok::<(), Box<dyn std::error::Error>>(())
