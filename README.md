@@ -23,7 +23,8 @@ For each device, you will need to retrieve and note down:
 - Device local key
 - Tuya LAN protocol version number (this involves trial and error for now, try 3.4 or 3.3)
 
-You can find each device's device_id and IP address in the Tuya Smart app under device settings -> "Device Information".
+You can find each device's device_id and MAC address in the Tuya Smart app under device settings -> "Device Information".
+Your router settings may help you retrieve the local IP address based on the MAC address.
 
 Retrieve the local_key of your devices via https://iot.tuya.com:
 
@@ -34,6 +35,9 @@ Retrieve the local_key of your devices via https://iot.tuya.com:
 - For each device, go to API Explorer and call the Get Device Information API with your device_id to retreive the device's local_key.
 
 ## MQTT protocol
+
+NOTE: this isn't very well designed, e.g. the device id in the MQTT topic is
+completely ignored and there only exist topics that make use of JSON.
 
 MQTT messages use the following JSON format:
 

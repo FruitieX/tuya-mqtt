@@ -11,6 +11,7 @@ pub struct MqttConfig {
     pub id: String,
     pub host: String,
     pub port: u16,
+    pub topic: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -19,6 +20,9 @@ pub struct DeviceConfig {
     pub local_key: String,
     pub ip: String,
     pub version: String,
+    pub max_brightness: Option<f32>,
+    pub power_on_field: Option<String>,
+    pub topic: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -61,6 +65,9 @@ pub fn read_config_devices() -> Result<(MqttConfig, TuyaConfig)> {
                     local_key: device.local_key,
                     ip: device.ip,
                     version: device.version,
+                    max_brightness: device.max_brightness,
+                    power_on_field: device.power_on_field,
+                    topic: device.topic,
                 },
             )
         })

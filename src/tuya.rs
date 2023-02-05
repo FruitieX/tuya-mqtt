@@ -12,11 +12,11 @@ use tokio::{sync::RwLock, task, time::timeout};
 
 use crate::mqtt::{MqttClient, MqttDevice};
 
-const POWER_ON_FIELD: &str = "20";
-const MODE_FIELD: &str = "21";
-const BRIGHTNESS_FIELD: &str = "22";
-const COLOR_TEMP_FIELD: &str = "23";
-const COLOR_FIELD: &str = "24";
+const DEFAULT_POWER_ON_FIELD: &str = "20";
+const DEFAULT_MODE_FIELD: &str = "21";
+const DEFAULT_BRIGHTNESS_FIELD: &str = "22";
+const DEFAULT_COLOR_TEMP_FIELD: &str = "23";
+const DEFAULT_COLOR_FIELD: &str = "24";
 
 // Assume (probably incorrectly) that supported range is from 2700K - 6500K
 const MIN_SUPPORTED_CT: f32 = 2700.0;
@@ -29,6 +29,9 @@ pub struct TuyaDeviceConfig {
     pub local_key: String,
     pub ip: String,
     pub version: String,
+    pub max_brightness: Option<f32>,
+    pub power_on_field: Option<String>,
+    pub topic: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -39,7 +42,7 @@ pub struct TuyaConfig {
 type TuyaDps = serde_json::Value;
 
 #[derive(Deserialize)]
-struct TuyaThreeFourPayload {
+struct TuyaDpsPayload {
     dps: Option<TuyaDps>,
 }
 
@@ -53,31 +56,30 @@ pub fn tuya_to_mqtt(
 
     let dps = match &first.payload {
         Payload::Struct(s) => s.dps.clone(),
-        Payload::String(s) => match config.version.as_str() {
-            "3.4" => {
-                let payload: Option<TuyaThreeFourPayload> = serde_json::from_str(s).ok();
-                payload.and_then(|p| p.dps)
-            }
-            _ => {
-                let dps: Option<TuyaDps> = serde_json::from_str(s).ok();
-                dps
-            }
-        },
+        Payload::String(s) => {
+            let payload: Option<TuyaDpsPayload> = serde_json::from_str(s).ok();
+            payload.and_then(|p| p.dps)
+        }
         _ => return Err(anyhow!("Unexpected Tuya device state struct")),
     }
     .context("Expected to find dps struct in Tuya response")?;
 
     let dps: HashMap<String, serde_json::Value> = serde_json::from_value(dps)?;
 
-    let power = if let Some(Value::Bool(value)) = dps.get(POWER_ON_FIELD) {
+    let power = if let Some(Value::Bool(value)) = dps.get(
+        config
+            .power_on_field
+            .as_deref()
+            .unwrap_or(DEFAULT_POWER_ON_FIELD),
+    ) {
         Some(*value)
     } else {
         Some(true)
     };
 
-    let mode = dps.get(MODE_FIELD);
+    let mode = dps.get(DEFAULT_MODE_FIELD);
     let cct = if mode == Some(&Value::String("white".to_string())) {
-        let value = dps.get(COLOR_TEMP_FIELD).context("Expected to find device color temperature in COLOR_TEMP_FIELD when device is in CT mode")?;
+        let value = dps.get(DEFAULT_COLOR_TEMP_FIELD).context("Expected to find device color temperature in COLOR_TEMP_FIELD when device is in CT mode")?;
         let ct = value
             .as_u64()
             .context("Could not deserialize color temperature as u64")?;
@@ -92,7 +94,7 @@ pub fn tuya_to_mqtt(
 
     let color = if mode == Some(&Value::String("colour".to_string())) {
         let value = dps
-            .get(COLOR_FIELD)
+            .get(DEFAULT_COLOR_FIELD)
             .context("Expected to find device color in COLOR_FIELD when device is in color mode")?;
         let color = value
             .as_str()
@@ -107,7 +109,7 @@ pub fn tuya_to_mqtt(
 
     let brightness = match mode {
         Some(Value::String(s)) if s == "white" => {
-            let value = dps.get(BRIGHTNESS_FIELD).context(
+            let value = dps.get(DEFAULT_BRIGHTNESS_FIELD).context(
                 "Expected to find device brightness in BRIGHTNESS_FIELD when device is in CT mode",
             )?;
             let brightness = value
@@ -121,7 +123,7 @@ pub fn tuya_to_mqtt(
             Some(brightness as f32 / 990.0)
         }
         Some(Value::String(s)) if s == "colour" => {
-            let value = dps.get(COLOR_FIELD).context(
+            let value = dps.get(DEFAULT_COLOR_FIELD).context(
                 "Expected to find device color in COLOR_FIELD when device is in color mode",
             )?;
             let color = value
@@ -135,7 +137,7 @@ pub fn tuya_to_mqtt(
 
     let device = MqttDevice {
         id: config.id.clone(),
-        name: config.name.clone(),
+        name: Some(config.name.clone()),
         power,
         brightness,
         cct,
@@ -147,17 +149,24 @@ pub fn tuya_to_mqtt(
     Ok(device)
 }
 
-pub fn mqtt_to_tuya(mqtt_device: MqttDevice) -> TuyaDps {
+pub fn mqtt_to_tuya(mqtt_device: MqttDevice, device_config: &TuyaDeviceConfig) -> TuyaDps {
     let mut dps = serde_json::Map::new();
 
     if let Some(power) = mqtt_device.power {
-        dps.insert(POWER_ON_FIELD.to_string(), json!(power));
+        dps.insert(
+            device_config
+                .power_on_field
+                .as_deref()
+                .unwrap_or(DEFAULT_POWER_ON_FIELD)
+                .to_string(),
+            json!(power),
+        );
     }
 
     if let Some(brightness) = mqtt_device.brightness {
         // Brightness goes from 10 to 1000 ¯\_(ツ)_/¯
         let tuya_brightness = f32::floor(brightness * 990.0) as u32 + 10;
-        dps.insert(BRIGHTNESS_FIELD.to_string(), json!(tuya_brightness));
+        dps.insert(DEFAULT_BRIGHTNESS_FIELD.to_string(), json!(tuya_brightness));
     }
 
     // NOTE: Very important that MODE_FIELD comes last in the dps struct, at
@@ -168,14 +177,20 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice) -> TuyaDps {
         // HSV is represented as a string of i16 hex values
         let hue: f32 = color.hue.to_positive_degrees();
         let saturation = (color.saturation as f32) * 1000.0;
-        let value = mqtt_device.brightness.unwrap_or(1.0) * (color.value as f32) * 1000.0;
+
+        let value = {
+            let brightness = mqtt_device.brightness.unwrap_or(1.0) * (color.value as f32);
+            let brightness = brightness.min(device_config.max_brightness.unwrap_or(1.0));
+            brightness * 1000.0
+        };
+
         let tuya_color_string = format!(
             "{:0>4x}{:0>4x}{:0>4x}",
             hue as i16, saturation as i16, value as i16
         );
 
-        dps.insert(COLOR_FIELD.to_string(), json!(tuya_color_string));
-        dps.insert(MODE_FIELD.to_string(), json!("colour"));
+        dps.insert(DEFAULT_COLOR_FIELD.to_string(), json!(tuya_color_string));
+        dps.insert(DEFAULT_MODE_FIELD.to_string(), json!("colour"));
     } else if let Some(cct) = mqtt_device.cct {
         // Scale the value into 0.0 - 1.0 range
         let q = (cct - MIN_SUPPORTED_CT) / (MAX_SUPPORTED_CT - MIN_SUPPORTED_CT);
@@ -184,8 +199,8 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice) -> TuyaDps {
         // Scale the value into 0 - 1000 range
         let tuya_ct = f32::floor(q * 1000.0) as u32;
 
-        dps.insert(COLOR_TEMP_FIELD.to_string(), json!(tuya_ct));
-        dps.insert(MODE_FIELD.to_string(), json!("white"));
+        dps.insert(DEFAULT_COLOR_TEMP_FIELD.to_string(), json!(tuya_ct));
+        dps.insert(DEFAULT_MODE_FIELD.to_string(), json!("white"));
     }
 
     serde_json::Value::Object(dps)
@@ -239,26 +254,31 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
 
                     (|| async move {
                         loop {
-                            let mut tuya_device = tuya_device.write().await;
+                            let messages = {
+                                let mut tuya_device = tuya_device.write().await;
 
-                            let messages = timeout(
-                                Duration::from_millis(5000),
-                                tuya_device.get(Payload::Struct(PayloadStruct {
-                                    dev_id: device_config.id.to_string(),
-                                    gw_id: Some(device_config.id.to_string()),
-                                    uid: Some(device_config.id.to_string()),
-                                    t: Some("0".to_string()),
-                                    dp_id: None,
-                                    dps: None,
-                                })),
-                            )
-                            .await??;
+                                timeout(
+                                    Duration::from_millis(5000),
+                                    tuya_device.get(Payload::Struct(PayloadStruct {
+                                        dev_id: device_config.id.to_string(),
+                                        gw_id: Some(device_config.id.to_string()),
+                                        uid: Some(device_config.id.to_string()),
+                                        t: Some("0".to_string()),
+                                        dp_id: None,
+                                        dps: None,
+                                    })),
+                                )
+                                .await??
+                            };
 
                             let mqtt_device = tuya_to_mqtt(messages, &device_config)?;
 
                             let json = serde_json::to_string(&mqtt_device)?;
 
-                            let topic = format!("home/lights/tuya/{}", device_config.id);
+                            let topic = device_config.topic.clone().unwrap_or_else(|| {
+                                mqtt_client.topic.replacen('+', &device_config.id, 1)
+                            });
+
                             mqtt_client
                                 .client
                                 .publish(topic, QoS::AtLeastOnce, true, json)
@@ -293,7 +313,7 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                                     .context("Expected to receive mqtt message from rx channel")?
                             };
 
-                            let dps = mqtt_to_tuya(res);
+                            let dps = mqtt_to_tuya(res, &device_config);
 
                             let mut tuya_device = tuya_device.write().await;
                             timeout(Duration::from_millis(3000), tuya_device.set_values(dps))
