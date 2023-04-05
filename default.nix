@@ -29,19 +29,5 @@ in
       nodejs
 
       clang
-      unstable.mold
     ];
-
-    # Make cargo use the mold linker for this project
-    shellHook = ''
-      mkdir -p backend/.cargo
-      cat << EOF > backend/.cargo/config.toml
-      [build]
-      target = "x86_64-unknown-linux-gnu"
-
-      [target.x86_64-unknown-linux-gnu]
-      linker = "clang"
-      rustflags = ["-C", "link-arg=-fuse-ld=${unstable.mold}/bin/mold"]
-      EOF
-    '';
   }
