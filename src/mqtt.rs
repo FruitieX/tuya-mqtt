@@ -86,5 +86,9 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
         }
     });
 
-    Ok(MqttClient { client, rx_map, topic: mqtt_config.topic.clone() })
+    Ok(MqttClient {
+        client,
+        rx_map,
+        topic: mqtt_config.topic.clone(),
+    })
 }

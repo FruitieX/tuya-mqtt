@@ -176,10 +176,10 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice, device_config: &TuyaDeviceConfig) -
     if let Some(color) = mqtt_device.color {
         // HSV is represented as a string of i16 hex values
         let hue: f32 = color.hue.to_positive_degrees();
-        let saturation = (color.saturation as f32) * 1000.0;
+        let saturation = color.saturation * 1000.0;
 
         let value = {
-            let brightness = mqtt_device.brightness.unwrap_or(1.0) * (color.value as f32);
+            let brightness = mqtt_device.brightness.unwrap_or(1.0) * color.value;
             let brightness = brightness.min(device_config.max_brightness.unwrap_or(1.0));
             brightness * 1000.0
         };
