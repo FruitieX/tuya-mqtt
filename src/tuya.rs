@@ -175,7 +175,7 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice, device_config: &TuyaDeviceConfig) -
     // feature of serde_json.
     if let Some(color) = mqtt_device.color {
         // HSV is represented as a string of i16 hex values
-        let hue: f32 = color.hue.to_positive_degrees();
+        let hue: f32 = color.hue.into_positive_degrees();
         let saturation = color.saturation * 1000.0;
 
         let value = {

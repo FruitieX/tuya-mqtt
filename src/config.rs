@@ -32,7 +32,7 @@ pub struct Config {
 }
 
 pub fn read_config_devices() -> Result<(MqttConfig, TuyaConfig)> {
-    let mut settings = config::Config::default();
+    let builder = config::Config::builder();
 
     let root = std::env::current_dir().unwrap();
     let sample_path = root.join("Settings.toml.example");
@@ -45,11 +45,10 @@ pub fn read_config_devices() -> Result<(MqttConfig, TuyaConfig)> {
         std::fs::copy(sample_path, path).unwrap();
     }
 
-    settings
-        .merge(config::File::with_name("Settings"))
-        .context("Failed to load Settings.toml config file")?;
+    let builder = builder.add_source(config::File::with_name("Settings"));
+    let settings = builder.build()?;
 
-    let config: Config = serde_path_to_error::deserialize(settings.clone()).context(
+    let config: Config = settings.try_deserialize().context(
         "Failed to deserialize config, compare your config file to Settings.toml.example!",
     )?;
 
