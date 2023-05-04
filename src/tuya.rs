@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use futures::{future::select_all, FutureExt};
-use log::{debug, warn};
+use log::debug;
 use palette::Hsv;
 use rumqttc::QoS;
 use rust_async_tuyapi::{tuyadevice::TuyaDevice, Payload, PayloadStruct};
@@ -218,148 +218,162 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
         loop {
             let tuya_device = tuya_device.clone();
 
-            // Connect to the device
-            let connected = {
-                let mut tuya_device = tuya_device.write().await;
-                debug!("Connecting to {}", device_config.name);
-                let res = timeout(Duration::from_millis(9000), tuya_device.connect()).await;
-                debug!("Connected to {}", device_config.name);
+            let res = try_poll(tuya_device, device_config.clone(), mqtt_client.clone()).await;
 
-                match res {
-                    Ok(Err(e)) => {
-                        eprintln!(
-                            "Error while connecting to Tuya device {}: {:?}",
-                            device_config.name, e
-                        );
-                        false
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Timeout while connecting to Tuya device {}: {:?}",
-                            device_config.name, e
-                        );
-                        false
-                    }
-                    _ => true,
-                }
-            };
-
-            if connected {
-                let mqtt_client = mqtt_client.clone();
-
-                // Loop until there's an error of any kind
-                let poll_future = {
-                    let tuya_device = tuya_device.clone();
-                    let device_config = device_config.clone();
-
-                    (|| async move {
-                        loop {
-                            let messages = {
-                                let mut tuya_device = tuya_device.write().await;
-
-                                timeout(
-                                    Duration::from_millis(5000),
-                                    tuya_device.get(Payload::Struct(PayloadStruct {
-                                        dev_id: device_config.id.to_string(),
-                                        gw_id: Some(device_config.id.to_string()),
-                                        uid: Some(device_config.id.to_string()),
-                                        t: Some("0".to_string()),
-                                        dp_id: None,
-                                        dps: None,
-                                    })),
-                                )
-                                .await??
-                            };
-
-                            let mqtt_device = tuya_to_mqtt(messages, &device_config)?;
-
-                            let json = serde_json::to_string(&mqtt_device)?;
-
-                            let topic = device_config.topic.clone().unwrap_or_else(|| {
-                                mqtt_client.topic.replacen('+', &device_config.id, 1)
-                            });
-
-                            mqtt_client
-                                .client
-                                .publish(topic, QoS::AtLeastOnce, true, json)
-                                .await?;
-
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
-
-                        #[allow(unreachable_code)]
-                        Ok::<(), Box<dyn std::error::Error>>(())
-                    })()
-                };
-
-                let send_future = {
-                    let mqtt_rx_map = mqtt_client.rx_map.clone();
-                    let tuya_device = tuya_device.clone();
-                    let device_config = device_config.clone();
-
-                    (|| async move {
-                        loop {
-                            let res = {
-                                let mqtt_rx =
-                                    mqtt_rx_map.get(&device_config.id).context(format!(
-                                        "Could not find configured MQTT device with id {}",
-                                        device_config.id
-                                    ))?;
-                                let mut mqtt_rx = mqtt_rx.write().await;
-                                mqtt_rx.changed().await?;
-                                let value = &*mqtt_rx.borrow();
-                                value
-                                    .clone()
-                                    .context("Expected to receive mqtt message from rx channel")?
-                            };
-
-                            let dps = mqtt_to_tuya(res, &device_config);
-
-                            let mut tuya_device = tuya_device.write().await;
-                            timeout(Duration::from_millis(3000), tuya_device.set_values(dps))
-                                .await??;
-
-                            // A bug in rust_async_tuyapi causes the next read after set_values to fail
-                            // with invalid payload messages. Make a dummy
-                            tuya_device
-                                .set(Payload::Struct(PayloadStruct {
-                                    dev_id: device_config.id.to_string(),
-                                    gw_id: Some(device_config.id.to_string()),
-                                    uid: Some(device_config.id.to_string()),
-                                    t: Some("0".to_string()),
-                                    dp_id: None,
-                                    dps: None,
-                                }))
-                                .await
-                                .ok();
-                        }
-
-                        #[allow(unreachable_code)]
-                        Ok::<(), Box<dyn std::error::Error>>(())
-                    })()
-                };
-
-                let res = select_all(vec![poll_future.boxed(), send_future.boxed()]).await;
-
-                if let (Err(e), future_index, _) = res {
-                    if future_index == 0 {
-                        warn!(
-                            "Error while polling Tuya device {}: {:?}",
-                            device_config.name, e
-                        )
-                    } else {
-                        warn!(
-                            "Error while sending to Tuya device {}: {:?}",
-                            device_config.name, e
-                        )
-                    }
-                }
+            if let Err(e) = res {
+                eprintln!("Error while polling Tuya device: {:?}", e);
             }
 
             // Wait before reconnecting
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     });
+
+    Ok(())
+}
+
+async fn try_poll(
+    tuya_device: Arc<RwLock<TuyaDevice>>,
+    device_config: TuyaDeviceConfig,
+    mqtt_client: MqttClient,
+) -> Result<()> {
+    // Connect to the device
+    let res = {
+        let mut tuya_device = tuya_device.write().await;
+        debug!("Connecting to {}", device_config.name);
+        timeout(Duration::from_millis(9000), tuya_device.connect()).await
+    };
+
+    match res {
+        Ok(Err(e)) => {
+            return Err(anyhow!(
+                "Error while connecting to Tuya device {}: {:?}",
+                device_config.name,
+                e
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow!(
+                "Timeout while connecting to Tuya device {}: {:?}",
+                device_config.name,
+                e
+            ));
+        }
+        _ => {}
+    }
+
+    debug!("Connected to {}", device_config.name);
+
+    let mqtt_client = mqtt_client.clone();
+
+    let poll_future = {
+        let tuya_device = tuya_device.clone();
+        let device_config = device_config.clone();
+
+        (|| async move {
+            loop {
+                let messages = {
+                    let mut tuya_device = tuya_device.write().await;
+
+                    timeout(
+                        Duration::from_millis(5000),
+                        tuya_device.get(Payload::Struct(PayloadStruct {
+                            dev_id: device_config.id.to_string(),
+                            gw_id: Some(device_config.id.to_string()),
+                            uid: Some(device_config.id.to_string()),
+                            t: Some("0".to_string()),
+                            dp_id: None,
+                            dps: None,
+                        })),
+                    )
+                    .await??
+                };
+
+                let mqtt_device = tuya_to_mqtt(messages, &device_config)?;
+
+                let json = serde_json::to_string(&mqtt_device)?;
+
+                let topic = device_config
+                    .topic
+                    .clone()
+                    .unwrap_or_else(|| mqtt_client.topic.replacen('+', &device_config.id, 1));
+
+                mqtt_client
+                    .client
+                    .publish(topic, QoS::AtLeastOnce, true, json)
+                    .await?;
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+
+            #[allow(unreachable_code)]
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })()
+    };
+
+    let send_future = {
+        let mqtt_rx_map = mqtt_client.rx_map.clone();
+        let tuya_device = tuya_device.clone();
+        let device_config = device_config.clone();
+
+        (|| async move {
+            loop {
+                let res = {
+                    let mqtt_rx = mqtt_rx_map.get(&device_config.id).context(format!(
+                        "Could not find configured MQTT device with id {}",
+                        device_config.id
+                    ))?;
+                    let mut mqtt_rx = mqtt_rx.write().await;
+                    mqtt_rx.changed().await?;
+                    let value = &*mqtt_rx.borrow();
+                    value
+                        .clone()
+                        .context("Expected to receive mqtt message from rx channel")?
+                };
+
+                let dps = mqtt_to_tuya(res, &device_config);
+
+                let mut tuya_device = tuya_device.write().await;
+                timeout(Duration::from_millis(3000), tuya_device.set_values(dps)).await??;
+
+                // A bug in rust_async_tuyapi causes the next read after set_values to fail
+                // with invalid payload messages. Make a dummy
+                tuya_device
+                    .set(Payload::Struct(PayloadStruct {
+                        dev_id: device_config.id.to_string(),
+                        gw_id: Some(device_config.id.to_string()),
+                        uid: Some(device_config.id.to_string()),
+                        t: Some("0".to_string()),
+                        dp_id: None,
+                        dps: None,
+                    }))
+                    .await
+                    .ok();
+            }
+
+            #[allow(unreachable_code)]
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })()
+    };
+
+    // Loop until there's an error of any kind
+    let res = select_all(vec![poll_future.boxed(), send_future.boxed()]).await;
+
+    if let (Err(e), future_index, _) = res {
+        if future_index == 0 {
+            return Err(anyhow!(
+                "Error while polling Tuya device {}: {:?}",
+                device_config.name,
+                e
+            ));
+        } else {
+            return Err(anyhow!(
+                "Error while sending to Tuya device {}: {:?}",
+                device_config.name,
+                e
+            ));
+        }
+    }
 
     Ok(())
 }
