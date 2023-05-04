@@ -25,3 +25,4 @@ palette = { version = "0.7.1", features = ["serializing"] }
 log = "0.4.17"
 futures = "0.3.28"
 config = "0.13.3"
+rand = "0.8.5"
