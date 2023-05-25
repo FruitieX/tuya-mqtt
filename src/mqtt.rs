@@ -27,7 +27,7 @@ pub struct MqttDevice {
 #[derive(Clone)]
 pub struct MqttClient {
     pub client: AsyncClient,
-    pub rx_map: HashMap<String, Arc<RwLock<Receiver<Option<MqttDevice>>>>>,
+    pub rx_map: HashMap<String, Receiver<Option<MqttDevice>>>,
     pub topic: String,
 }
 
@@ -61,7 +61,6 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
 
         let (tx, rx) = tokio::sync::watch::channel(None);
         let tx = Arc::new(RwLock::new(tx));
-        let rx = Arc::new(RwLock::new(rx));
         tx_map.insert(device.id.clone(), tx);
         rx_map.insert(device.id.clone(), rx);
     }

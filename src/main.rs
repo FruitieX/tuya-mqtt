@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for device in tuya_config.devices.into_values() {
         let mqtt_client = mqtt_client.clone();
-        init_tuya(device, mqtt_client).await?;
+        init_tuya(device, mqtt_client).await;
     }
 
     tokio::signal::ctrl_c().await?;
