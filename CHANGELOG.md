@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/FruitieX/tuya-mqtt/compare/v0.3.0...v0.3.1) (2023-05-25)
+
+
+### Bug Fixes
+
+* multiple device configurations were broken ([1dce99e](https://github.com/FruitieX/tuya-mqtt/commit/1dce99efcfc07b1a2f6e4dcee34f57d5deb085fe))
+
 ## [0.3.0](https://github.com/FruitieX/tuya-mqtt/compare/v0.2.0...v0.3.0) (2023-05-25)
 
 
