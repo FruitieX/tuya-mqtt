@@ -357,17 +357,19 @@ pub async fn connect_and_poll(
 }
 
 pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient) {
-    loop {
-        let device_config = device_config.clone();
-        let mqtt_client = mqtt_client.clone();
+    tokio::spawn(async move {
+        loop {
+            let device_config = device_config.clone();
+            let mqtt_client = mqtt_client.clone();
 
-        let res = connect_and_poll(device_config, mqtt_client).await;
+            let res = connect_and_poll(device_config, mqtt_client).await;
 
-        if let Err(e) = res {
-            eprintln!("Error while polling Tuya device: {:?}", e);
+            if let Err(e) = res {
+                eprintln!("Error while polling Tuya device: {:?}", e);
+            }
+
+            // Wait before reconnecting
+            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
-
-        // Wait before reconnecting
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-    }
+    });
 }
