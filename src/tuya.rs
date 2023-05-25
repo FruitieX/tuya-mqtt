@@ -362,10 +362,11 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
             let device_config = device_config.clone();
             let mqtt_client = mqtt_client.clone();
 
+            let name = device_config.name.clone();
             let res = connect_and_poll(device_config, mqtt_client).await;
 
             if let Err(e) = res {
-                eprintln!("Error while polling Tuya device: {:?}", e);
+                eprintln!("Error while polling {}: {:?}", name, e);
             }
 
             // Wait before reconnecting
