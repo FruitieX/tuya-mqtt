@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use palette::Hsv;
 use rand::{distributions::Alphanumeric, Rng};
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
@@ -12,16 +11,57 @@ use tokio::{
 use crate::config::MqttConfig;
 use crate::tuya::TuyaConfig;
 
+// Assume (probably incorrectly) that supported range is from 2700K - 6500K
+pub const MIN_SUPPORTED_CT: u16 = 2700;
+pub const MAX_SUPPORTED_CT: u16 = 6500;
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Capabilities {
+    /// Hue (0 - 360) and saturation (0.0 - 1.0)
+    #[serde(default)]
+    pub hs: bool,
+
+    /// Color temperature (2000 - 6500)
+    pub ct: Option<std::ops::Range<u16>>,
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Capabilities {
+            hs: true,
+            ct: Some(MIN_SUPPORTED_CT..MAX_SUPPORTED_CT),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Hs {
+    pub h: u16,
+    pub s: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+pub struct Ct {
+    pub ct: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum DeviceColor {
+    Hs(Hs),
+    Ct(Ct),
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct MqttDevice {
     pub id: String,
     pub name: Option<String>,
     pub power: Option<bool>,
     pub brightness: Option<f32>,
-    pub cct: Option<f32>,
-    pub color: Option<Hsv>,
+    pub color: Option<DeviceColor>,
     pub transition_ms: Option<f32>,
     pub sensor_value: Option<String>,
+    pub capabilities: Option<Capabilities>,
 }
 
 #[derive(Clone)]

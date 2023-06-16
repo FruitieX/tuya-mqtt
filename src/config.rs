@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::tuya::{TuyaConfig, TuyaDeviceConfig};
+use crate::{
+    mqtt::Capabilities,
+    tuya::{TuyaConfig, TuyaDeviceConfig},
+};
 
 pub type DeviceId = String;
 
@@ -22,6 +25,7 @@ pub struct DeviceConfig {
     pub version: String,
     pub max_brightness: Option<f32>,
     pub power_on_field: Option<String>,
+    pub capabilities: Option<Capabilities>,
     pub topic: Option<String>,
 }
 
@@ -67,6 +71,7 @@ pub fn read_config_devices() -> Result<(MqttConfig, TuyaConfig)> {
                     max_brightness: device.max_brightness,
                     power_on_field: device.power_on_field,
                     topic: device.topic,
+                    capabilities: device.capabilities,
                 },
             )
         })

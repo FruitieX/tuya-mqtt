@@ -2,7 +2,6 @@ use anyhow::{anyhow, Context, Result};
 use futures::future::select_all;
 use futures::future::FutureExt;
 use log::debug;
-use palette::Hsv;
 use rumqttc::QoS;
 use rust_async_tuyapi::mesparse::CommandType;
 use rust_async_tuyapi::PayloadStruct;
@@ -15,6 +14,12 @@ use std::{net::IpAddr, str::FromStr, time::Duration};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
+use crate::mqtt::Capabilities;
+use crate::mqtt::Ct;
+use crate::mqtt::DeviceColor;
+use crate::mqtt::Hs;
+use crate::mqtt::MAX_SUPPORTED_CT;
+use crate::mqtt::MIN_SUPPORTED_CT;
 use crate::mqtt::{MqttClient, MqttDevice};
 
 const DEFAULT_POWER_ON_FIELD: &str = "20";
@@ -22,10 +27,6 @@ const DEFAULT_MODE_FIELD: &str = "21";
 const DEFAULT_BRIGHTNESS_FIELD: &str = "22";
 const DEFAULT_COLOR_TEMP_FIELD: &str = "23";
 const DEFAULT_COLOR_FIELD: &str = "24";
-
-// Assume (probably incorrectly) that supported range is from 2700K - 6500K
-const MIN_SUPPORTED_CT: f32 = 2700.0;
-const MAX_SUPPORTED_CT: f32 = 6500.0;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TuyaDeviceConfig {
@@ -36,6 +37,7 @@ pub struct TuyaDeviceConfig {
     pub version: String,
     pub max_brightness: Option<f32>,
     pub power_on_field: Option<String>,
+    pub capabilities: Option<Capabilities>,
     pub topic: Option<String>,
 }
 
@@ -89,20 +91,6 @@ pub fn tuya_to_mqtt(
     };
 
     let mode = dps.get(DEFAULT_MODE_FIELD);
-    let cct = if mode == Some(&Value::String("white".to_string())) {
-        let value = dps.get(DEFAULT_COLOR_TEMP_FIELD).context("Expected to find device color temperature in COLOR_TEMP_FIELD when device is in CT mode")?;
-        let ct = value
-            .as_u64()
-            .context("Could not deserialize color temperature as u64")?;
-
-        // Scale range to 0-1
-        let q = ct as f32 / 1000.0;
-
-        Some(q * (MAX_SUPPORTED_CT - MIN_SUPPORTED_CT) + MIN_SUPPORTED_CT)
-    } else {
-        None
-    };
-
     let color = if mode == Some(&Value::String("colour".to_string())) {
         let value = dps
             .get(DEFAULT_COLOR_FIELD)
@@ -113,7 +101,21 @@ pub fn tuya_to_mqtt(
 
         let h = i32::from_str_radix(&color[0..4], 16)?;
         let s = i32::from_str_radix(&color[4..8], 16)?;
-        Some(Hsv::new(h as f32, s as f32 / 1000., 1.))
+        Some(DeviceColor::Hs(Hs {
+            h: h as u16,
+            s: s as f32 / 1000.,
+        }))
+    } else if mode == Some(&Value::String("white".to_string())) {
+        let value = dps.get(DEFAULT_COLOR_TEMP_FIELD).context("Expected to find device color temperature in COLOR_TEMP_FIELD when device is in CT mode")?;
+        let ct = value
+            .as_u64()
+            .context("Could not deserialize color temperature as u64")?;
+
+        // Scale range to 0-1 and convert to kelvin
+        let q = ct as f32 / 1000.0;
+        let k = q * (MAX_SUPPORTED_CT - MIN_SUPPORTED_CT) as f32 + MIN_SUPPORTED_CT as f32;
+
+        Some(DeviceColor::Ct(Ct { ct: k as u16 }))
     } else {
         None
     };
@@ -151,10 +153,10 @@ pub fn tuya_to_mqtt(
         name: Some(config.name.clone()),
         power,
         brightness,
-        cct,
         color,
         transition_ms: Some(500.0),
         sensor_value: None,
+        capabilities: Some(config.capabilities.clone().unwrap_or_default()),
     };
 
     Ok(device)
@@ -184,13 +186,13 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice, device_config: &TuyaDeviceConfig) -
     // least my Tuya lamps will not set the provided color unless this is the
     // case. Note also that this is why we need to enable the preserve_order
     // feature of serde_json.
-    if let Some(color) = mqtt_device.color {
+    if let Some(DeviceColor::Hs(color)) = mqtt_device.color {
         // HSV is represented as a string of i16 hex values
-        let hue: f32 = color.hue.into_positive_degrees();
-        let saturation = color.saturation * 1000.0;
+        let hue: f32 = color.h as f32;
+        let saturation = color.s * 1000.0;
 
         let value = {
-            let brightness = mqtt_device.brightness.unwrap_or(1.0) * color.value;
+            let brightness = mqtt_device.brightness.unwrap_or(1.0);
             let brightness = brightness.min(device_config.max_brightness.unwrap_or(1.0));
             brightness * 1000.0
         };
@@ -202,9 +204,9 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice, device_config: &TuyaDeviceConfig) -
 
         dps.insert(DEFAULT_COLOR_FIELD.to_string(), json!(tuya_color_string));
         dps.insert(DEFAULT_MODE_FIELD.to_string(), json!("colour"));
-    } else if let Some(cct) = mqtt_device.cct {
+    } else if let Some(DeviceColor::Ct(Ct { ct })) = mqtt_device.color {
         // Scale the value into 0.0 - 1.0 range
-        let q = (cct - MIN_SUPPORTED_CT) / (MAX_SUPPORTED_CT - MIN_SUPPORTED_CT);
+        let q = (ct - MIN_SUPPORTED_CT) as f32 / (MAX_SUPPORTED_CT - MIN_SUPPORTED_CT) as f32;
         let q = q.clamp(0.0, 1.0);
 
         // Scale the value into 0 - 1000 range
