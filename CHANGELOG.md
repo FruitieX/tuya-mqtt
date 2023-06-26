@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/FruitieX/tuya-mqtt/compare/v0.4.0...v0.4.1) (2023-06-26)
+
+
+### Bug Fixes
+
+* attempt reconnecting to mqtt after failure ([9ece428](https://github.com/FruitieX/tuya-mqtt/commit/9ece428590c9506d1328c0c9507ec8c3f34d7542))
+
 ## [0.4.0](https://github.com/FruitieX/tuya-mqtt/compare/v0.3.1...v0.4.0) (2023-06-16)
 
 
