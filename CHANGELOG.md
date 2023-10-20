@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.2](https://github.com/FruitieX/tuya-mqtt/compare/v0.4.1...v0.4.2) (2023-10-20)
+
+
+### Bug Fixes
+
+* **deps:** update all non-major dependencies ([57ee57b](https://github.com/FruitieX/tuya-mqtt/commit/57ee57b0424d03e3f59dc60e469e50f53f071087))
+* **deps:** update all non-major dependencies ([1c81e9e](https://github.com/FruitieX/tuya-mqtt/commit/1c81e9e1e08d575123389182f2def5222e57442a))
+* **deps:** update rust crate anyhow to 1.0.73 ([c08b9d2](https://github.com/FruitieX/tuya-mqtt/commit/c08b9d295a22d5db7b8c67cf5a9923d423f07577))
+* **deps:** update rust crate anyhow to 1.0.74 ([b71f0e5](https://github.com/FruitieX/tuya-mqtt/commit/b71f0e53c58d0074b08b5e7bdaeac21ef62e9972))
+* **deps:** update rust crate anyhow to 1.0.75 ([b580ab2](https://github.com/FruitieX/tuya-mqtt/commit/b580ab20abd4e922a1e799b86db75ac60bbab33b))
+* **deps:** update rust crate log to 0.4.20 ([a321eb9](https://github.com/FruitieX/tuya-mqtt/commit/a321eb917e3a9e6d140ccbe423fda39cc03cf4c4))
+* **deps:** update rust crate palette to 0.7.3 ([a7d05fa](https://github.com/FruitieX/tuya-mqtt/commit/a7d05fafa676cac34e0087653ff3f2025beb48c5))
+* **deps:** update rust crate serde to 1.0.165 ([8e3cf76](https://github.com/FruitieX/tuya-mqtt/commit/8e3cf76f34f311aa7d67c14c5e98226f8c580e60))
+* **deps:** update rust crate serde to 1.0.166 ([b2a477b](https://github.com/FruitieX/tuya-mqtt/commit/b2a477b62a15e18f2fed72b7cb7b95ed95453308))
+* **deps:** update rust crate serde to 1.0.167 ([862127f](https://github.com/FruitieX/tuya-mqtt/commit/862127f07b22d95b3e97ad1827ac568bee2996c3))
+* **deps:** update rust crate serde to 1.0.170 ([78191aa](https://github.com/FruitieX/tuya-mqtt/commit/78191aa4a6ba2a5407d5a63652aa3af7b4878f99))
+* **deps:** update rust crate serde to 1.0.171 ([67371a9](https://github.com/FruitieX/tuya-mqtt/commit/67371a9158d500212f43277739e10c6f0330a561))
+* **deps:** update rust crate serde to 1.0.181 ([1b1af2f](https://github.com/FruitieX/tuya-mqtt/commit/1b1af2f7555c3e6d2a68682318bfbb732aeca828))
+* **deps:** update rust crate serde to 1.0.182 ([b02b991](https://github.com/FruitieX/tuya-mqtt/commit/b02b9916ad1ef92779b5382637f39b7d1445379b))
+* **deps:** update rust crate serde to 1.0.183 ([2d029ed](https://github.com/FruitieX/tuya-mqtt/commit/2d029edcb081467f6b88828ffa29ac3afaa5d0aa))
+* **deps:** update rust crate serde to 1.0.185 ([31c3361](https://github.com/FruitieX/tuya-mqtt/commit/31c33613f88f6f30f5e4bb3bc86dba0e173d7bc0))
+* **deps:** update rust crate serde to 1.0.186 ([8306674](https://github.com/FruitieX/tuya-mqtt/commit/83066746aa120e2fdb663022065c99528a35a493))
+* MQTT client re-subscribes on reconnect ([6e3152a](https://github.com/FruitieX/tuya-mqtt/commit/6e3152a1c2032caa147ff736615c41aee66fe11f))
+
 ## [0.4.1](https://github.com/FruitieX/tuya-mqtt/compare/v0.4.0...v0.4.1) (2023-06-26)
 
 
