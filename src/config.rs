@@ -9,7 +9,7 @@ use crate::{
 
 pub type DeviceId = String;
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 pub struct MqttConfig {
     pub id: String,
     pub host: String,

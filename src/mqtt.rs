@@ -87,9 +87,6 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
     );
     options.set_keep_alive(Duration::from_secs(5));
     let (client, mut eventloop) = AsyncClient::new(options, 10);
-    client
-        .subscribe(format!("{}/set", mqtt_config.topic), QoS::AtMostOnce)
-        .await?;
 
     let mut tx_map = HashMap::new();
     let mut rx_map = HashMap::new();
@@ -107,34 +104,48 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
         rx_map.insert(device.id.clone(), rx);
     }
 
-    task::spawn(async move {
-        loop {
-            let notification = eventloop.poll().await;
-            let mqtt_tx = tx_map.clone();
+    {
+        let client = client.clone();
+        let mqtt_config = mqtt_config.clone();
 
-            let res = (|| async move {
-                if let rumqttc::Event::Incoming(rumqttc::Packet::Publish(msg)) = notification? {
-                    let device: MqttDevice = serde_json::from_slice(&msg.payload)?;
+        task::spawn(async move {
+            loop {
+                let notification = eventloop.poll().await;
+                let mqtt_tx = tx_map.clone();
+                let client = client.clone();
+                let mqtt_config = mqtt_config.clone();
 
-                    let device_id = &device.id;
-                    let tx = mqtt_tx.get(device_id).context(format!(
-                        "Could not find configured MQTT device with id {}",
-                        device_id
-                    ))?;
-                    let tx = tx.write().await;
-                    tx.send(Some(device))?;
+                let res = (|| async move {
+                    match notification? {
+                        rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_)) => {
+                            client
+                                .subscribe(format!("{}/set", mqtt_config.topic), QoS::AtMostOnce)
+                                .await?;
+                        }
+                        rumqttc::Event::Incoming(rumqttc::Packet::Publish(msg)) => {
+                            let device: MqttDevice = serde_json::from_slice(&msg.payload)?;
+
+                            let device_id = &device.id;
+                            let tx = mqtt_tx.get(device_id).context(format!(
+                                "Could not find configured MQTT device with id {}",
+                                device_id
+                            ))?;
+                            let tx = tx.write().await;
+                            tx.send(Some(device))?;
+                        }
+                        _ => {}
+                    }
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                })()
+                .await;
+
+                if let Err(e) = res {
+                    eprintln!("MQTT error: {:?}", e);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-
-                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-            })()
-            .await;
-
-            if let Err(e) = res {
-                eprintln!("MQTT error: {:?}", e);
-                tokio::time::sleep(Duration::from_secs(1)).await;
             }
-        }
-    });
+        });
+    }
 
     Ok(MqttClient {
         client,
