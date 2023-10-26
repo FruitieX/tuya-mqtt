@@ -6,9 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-env_logger = "0.10.0"
-rust-async-tuyapi = { version = "1.0.0" }
-tokio = { version = "1", features = [
+env_logger = "=0.10.0"
+rust-async-tuyapi = { version = "=1.0.0" }
+tokio = { version = "=1.33.0", features = [
 	"rt",
 	"rt-multi-thread",
 	"net",
@@ -17,12 +17,12 @@ tokio = { version = "1", features = [
 	"sync",
 	"signal",
 ] }
-serde = { version = "1.0.190", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
-rumqttc = "0.23.0"
-anyhow = "1.0.75"
-palette = { version = "0.7.3", features = ["serializing"] }
-log = "0.4.20"
-futures = "0.3.28"
-config = "0.13.3"
-rand = "0.8.5"
+serde = { version = "=1.0.190", features = ["derive"] }
+serde_json = { version = "=1.0.107", features = ["preserve_order"] }
+rumqttc = "=0.23.0"
+anyhow = "=1.0.75"
+palette = { version = "=0.7.3", features = ["serializing"] }
+log = "=0.4.20"
+futures = "=0.3.28"
+config = "=0.13.3"
+rand = "=0.8.5"
