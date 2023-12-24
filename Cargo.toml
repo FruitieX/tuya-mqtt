@@ -23,6 +23,6 @@ rumqttc = "=0.23.0"
 anyhow = "=1.0.76"
 palette = { version = "=0.7.3", features = ["serializing"] }
 log = "=0.4.20"
-futures = "=0.3.29"
+futures = "=0.3.30"
 config = "=0.13.4"
 rand = "=0.8.5"
