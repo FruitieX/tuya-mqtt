@@ -61,7 +61,7 @@ pub fn tuya_to_mqtt(
         .first()
         .context("Expected Tuya response to contain at least one message")?;
 
-    let dps = match &first.payload {
+    let dps_value = match &first.payload {
         Payload::Struct(s) => s.dps.clone(),
         Payload::String(s) => match first.command {
             Some(CommandType::ControlNew) => {
@@ -77,7 +77,7 @@ pub fn tuya_to_mqtt(
     }
     .context("Expected to find dps struct in Tuya response")?;
 
-    let dps: HashMap<String, serde_json::Value> = serde_json::from_value(dps)?;
+    let dps: HashMap<String, serde_json::Value> = serde_json::from_value(dps_value.clone())?;
 
     let power = if let Some(Value::Bool(value)) = dps.get(
         config
@@ -157,6 +157,7 @@ pub fn tuya_to_mqtt(
         transition_ms: Some(500.0),
         sensor_value: None,
         capabilities: Some(config.capabilities.clone().unwrap_or_default()),
+        raw: Some(dps_value),
     };
 
     Ok(device)

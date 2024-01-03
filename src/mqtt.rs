@@ -64,6 +64,7 @@ pub struct MqttDevice {
     pub transition_ms: Option<f32>,
     pub sensor_value: Option<String>,
     pub capabilities: Option<Capabilities>,
+    pub raw: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
