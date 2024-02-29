@@ -22,7 +22,7 @@ serde_json = { version = "=1.0.114", features = ["preserve_order"] }
 rumqttc = "=0.24.0"
 anyhow = "=1.0.80"
 palette = { version = "=0.7.5", features = ["serializing"] }
-log = "=0.4.20"
+log = "=0.4.21"
 futures = "=0.3.30"
 config = "=0.14.0"
 rand = "=0.8.5"
