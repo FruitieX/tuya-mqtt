@@ -24,5 +24,5 @@ anyhow = "=1.0.94"
 palette = { version = "=0.7.6", features = ["serializing"] }
 log = "=0.4.22"
 futures = "=0.3.31"
-config = "=0.15.3"
+config = "=0.15.4"
 rand = "=0.8.5"
