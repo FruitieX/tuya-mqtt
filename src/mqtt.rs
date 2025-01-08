@@ -93,12 +93,6 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
     let mut rx_map = HashMap::new();
 
     for device in tuya_config.devices.values() {
-        if let Some(topic) = &device.topic {
-            client
-                .subscribe(format!("{}/set", topic), QoS::AtMostOnce)
-                .await?;
-        }
-
         let (tx, rx) = tokio::sync::watch::channel(None);
         let tx = Arc::new(RwLock::new(tx));
         tx_map.insert(device.id.clone(), tx);
@@ -108,6 +102,7 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
     {
         let client = client.clone();
         let mqtt_config = mqtt_config.clone();
+        let tuya_config = tuya_config.clone();
 
         task::spawn(async move {
             loop {
@@ -115,6 +110,7 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
                 let mqtt_tx = tx_map.clone();
                 let client = client.clone();
                 let mqtt_config = mqtt_config.clone();
+                let tuya_config = tuya_config.clone();
 
                 let res = (|| async move {
                     match notification? {
@@ -122,6 +118,24 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
                             client
                                 .subscribe(format!("{}/set", mqtt_config.topic), QoS::AtMostOnce)
                                 .await?;
+
+                            // Subscribe to custom topics asynchronously to avoid blocking the event loop
+                            task::spawn(async move {
+                                for device in tuya_config.devices.values() {
+                                    if let Some(topic) = &device.topic {
+                                        let res = client
+                                            .subscribe(format!("{}/set", topic), QoS::AtMostOnce)
+                                            .await;
+
+                                        if let Err(e) = res {
+                                            eprintln!(
+                                                "Could not subscribe to topic {}: {:?}",
+                                                topic, e
+                                            );
+                                        }
+                                    }
+                                }
+                            });
                         }
                         rumqttc::Event::Incoming(rumqttc::Packet::Publish(msg)) => {
                             let device: MqttDevice = serde_json::from_slice(&msg.payload)?;

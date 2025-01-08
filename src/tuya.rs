@@ -281,10 +281,14 @@ pub async fn connect_and_poll(
                         .clone()
                         .unwrap_or_else(|| mqtt_client.topic.replacen('+', &device_config.id, 1));
 
-                    mqtt_client
+                    let res = mqtt_client
                         .client
                         .publish(topic, QoS::AtLeastOnce, true, json)
-                        .await?;
+                        .await;
+
+                    if let Err(e) = res {
+                        eprintln!("Error while publishing to MQTT: {:?}", e);
+                    }
                 }
             }
 
