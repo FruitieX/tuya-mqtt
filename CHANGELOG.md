@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.2](https://github.com/FruitieX/tuya-mqtt/compare/v0.5.1...v0.5.2) (2025-02-11)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate config to v0.15.5 ([#334](https://github.com/FruitieX/tuya-mqtt/issues/334)) ([e9e556b](https://github.com/FruitieX/tuya-mqtt/commit/e9e556b294efc0cb3e495f9804cb77a4bc26988a))
+* **deps:** update rust crate config to v0.15.6 ([#337](https://github.com/FruitieX/tuya-mqtt/issues/337)) ([9603fd6](https://github.com/FruitieX/tuya-mqtt/commit/9603fd65d56a12daeaf99a2345d12911f6c8043b))
+* **deps:** update rust crate config to v0.15.7 ([#346](https://github.com/FruitieX/tuya-mqtt/issues/346)) ([d4b6eb4](https://github.com/FruitieX/tuya-mqtt/commit/d4b6eb48f153e3bb31d5a791095933bd5a0dbb61))
+* **deps:** update rust crate config to v0.15.8 ([#350](https://github.com/FruitieX/tuya-mqtt/issues/350)) ([c713ad5](https://github.com/FruitieX/tuya-mqtt/commit/c713ad5763bf687b64f018b8ca8ac93c0fd41efc))
+* **deps:** update rust crate log to v0.4.24 ([#333](https://github.com/FruitieX/tuya-mqtt/issues/333)) ([5149a26](https://github.com/FruitieX/tuya-mqtt/commit/5149a26fdc8ebdcc0f0a1456d663b30d35ac109a))
+* **deps:** update rust crate log to v0.4.25 ([#336](https://github.com/FruitieX/tuya-mqtt/issues/336)) ([3c56590](https://github.com/FruitieX/tuya-mqtt/commit/3c5659057d2f689df5a622d8826e82306e74ba6d))
+* **deps:** update rust crate serde_json to v1.0.136 ([#339](https://github.com/FruitieX/tuya-mqtt/issues/339)) ([d98d3e1](https://github.com/FruitieX/tuya-mqtt/commit/d98d3e1a173a6b17c8617e1bceb862ac41c35c59))
+* **deps:** update rust crate serde_json to v1.0.137 ([#340](https://github.com/FruitieX/tuya-mqtt/issues/340)) ([e31fed2](https://github.com/FruitieX/tuya-mqtt/commit/e31fed2d877e95f4455b54d717a9224b097eefe4))
+* **deps:** update rust crate serde_json to v1.0.138 ([#344](https://github.com/FruitieX/tuya-mqtt/issues/344)) ([71f82de](https://github.com/FruitieX/tuya-mqtt/commit/71f82de0ca180dcc878bf3e796b39c94bc06450f))
+* **deps:** update rust crate tokio to v1.43.0 ([#330](https://github.com/FruitieX/tuya-mqtt/issues/330)) ([d8cba42](https://github.com/FruitieX/tuya-mqtt/commit/d8cba426638c75b7e13cf4fb27a418631f4519bf))
+
 ## [0.5.1](https://github.com/FruitieX/tuya-mqtt/compare/v0.5.0...v0.5.1) (2025-01-08)
 
 
