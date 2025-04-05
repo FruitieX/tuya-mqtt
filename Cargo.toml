@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 env_logger = "=0.11.8"
 rust-async-tuyapi = { version = "=1.0.0" }
-tokio = { version = "=1.44.1", features = [
+tokio = { version = "=1.44.2", features = [
 	"rt",
 	"rt-multi-thread",
 	"net",
