@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.5.2](https://github.com/FruitieX/tuya-mqtt/compare/v0.5.1...v0.5.2) (2025-07-19)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate anyhow to v1.0.96 ([#353](https://github.com/FruitieX/tuya-mqtt/issues/353)) ([22d315a](https://github.com/FruitieX/tuya-mqtt/commit/22d315a91a3dab5f2611a76a8b7c0ddd6a1f0be1))
+* **deps:** update rust crate anyhow to v1.0.97 ([#363](https://github.com/FruitieX/tuya-mqtt/issues/363)) ([4477a6d](https://github.com/FruitieX/tuya-mqtt/commit/4477a6d8a83d980c710be2b2de9c2cb9bfe29ea4))
+* **deps:** update rust crate anyhow to v1.0.98 ([#385](https://github.com/FruitieX/tuya-mqtt/issues/385)) ([fc7828f](https://github.com/FruitieX/tuya-mqtt/commit/fc7828f96228a53a215cf3f6ebf277c4b0d2ad87))
+* **deps:** update rust crate config to v0.15.11 ([#370](https://github.com/FruitieX/tuya-mqtt/issues/370)) ([b7f8a34](https://github.com/FruitieX/tuya-mqtt/commit/b7f8a34e6e49706db05e34820df8fae69b5a717b))
+* **deps:** update rust crate config to v0.15.12 ([#412](https://github.com/FruitieX/tuya-mqtt/issues/412)) ([dfd1d6a](https://github.com/FruitieX/tuya-mqtt/commit/dfd1d6a682e5169e67ca77b5fa7e0d910ddce2ac))
+* **deps:** update rust crate config to v0.15.13 ([#413](https://github.com/FruitieX/tuya-mqtt/issues/413)) ([e91dfe9](https://github.com/FruitieX/tuya-mqtt/commit/e91dfe9c954edd09d923366c9ca98e16a7b087be))
+* **deps:** update rust crate config to v0.15.5 ([#334](https://github.com/FruitieX/tuya-mqtt/issues/334)) ([e9e556b](https://github.com/FruitieX/tuya-mqtt/commit/e9e556b294efc0cb3e495f9804cb77a4bc26988a))
+* **deps:** update rust crate config to v0.15.6 ([#337](https://github.com/FruitieX/tuya-mqtt/issues/337)) ([9603fd6](https://github.com/FruitieX/tuya-mqtt/commit/9603fd65d56a12daeaf99a2345d12911f6c8043b))
+* **deps:** update rust crate config to v0.15.7 ([#346](https://github.com/FruitieX/tuya-mqtt/issues/346)) ([d4b6eb4](https://github.com/FruitieX/tuya-mqtt/commit/d4b6eb48f153e3bb31d5a791095933bd5a0dbb61))
+* **deps:** update rust crate config to v0.15.8 ([#350](https://github.com/FruitieX/tuya-mqtt/issues/350)) ([c713ad5](https://github.com/FruitieX/tuya-mqtt/commit/c713ad5763bf687b64f018b8ca8ac93c0fd41efc))
+* **deps:** update rust crate config to v0.15.9 ([#365](https://github.com/FruitieX/tuya-mqtt/issues/365)) ([45c1410](https://github.com/FruitieX/tuya-mqtt/commit/45c14104d31f25f376f1f4da4a84f6e9b9bd9028))
+* **deps:** update rust crate env_logger to v0.11.7 ([#369](https://github.com/FruitieX/tuya-mqtt/issues/369)) ([caacdfe](https://github.com/FruitieX/tuya-mqtt/commit/caacdfe7e8aaf23afcb94cfdfb1c41883084aa7b))
+* **deps:** update rust crate env_logger to v0.11.8 ([#381](https://github.com/FruitieX/tuya-mqtt/issues/381)) ([a385d75](https://github.com/FruitieX/tuya-mqtt/commit/a385d756c46493d72afdcd90f51b347aa7b62f29))
+* **deps:** update rust crate log to v0.4.24 ([#333](https://github.com/FruitieX/tuya-mqtt/issues/333)) ([5149a26](https://github.com/FruitieX/tuya-mqtt/commit/5149a26fdc8ebdcc0f0a1456d663b30d35ac109a))
+* **deps:** update rust crate log to v0.4.25 ([#336](https://github.com/FruitieX/tuya-mqtt/issues/336)) ([3c56590](https://github.com/FruitieX/tuya-mqtt/commit/3c5659057d2f689df5a622d8826e82306e74ba6d))
+* **deps:** update rust crate log to v0.4.26 ([#357](https://github.com/FruitieX/tuya-mqtt/issues/357)) ([6d81bb1](https://github.com/FruitieX/tuya-mqtt/commit/6d81bb1e9efb0a367cec974bab4bc5414a5ff38d))
+* **deps:** update rust crate log to v0.4.27 ([#378](https://github.com/FruitieX/tuya-mqtt/issues/378)) ([8478742](https://github.com/FruitieX/tuya-mqtt/commit/84787426ee73b5f65f21d3f08bace5e487c08a35))
+* **deps:** update rust crate serde to v1.0.218 ([#354](https://github.com/FruitieX/tuya-mqtt/issues/354)) ([d3b4d83](https://github.com/FruitieX/tuya-mqtt/commit/d3b4d83edd74ffac94f90bfbc8bbb683b1670331))
+* **deps:** update rust crate serde to v1.0.219 ([#367](https://github.com/FruitieX/tuya-mqtt/issues/367)) ([36e9ba2](https://github.com/FruitieX/tuya-mqtt/commit/36e9ba2126344eafcc54589b360bbb452b63f8e7))
+* **deps:** update rust crate serde_json to v1.0.136 ([#339](https://github.com/FruitieX/tuya-mqtt/issues/339)) ([d98d3e1](https://github.com/FruitieX/tuya-mqtt/commit/d98d3e1a173a6b17c8617e1bceb862ac41c35c59))
+* **deps:** update rust crate serde_json to v1.0.137 ([#340](https://github.com/FruitieX/tuya-mqtt/issues/340)) ([e31fed2](https://github.com/FruitieX/tuya-mqtt/commit/e31fed2d877e95f4455b54d717a9224b097eefe4))
+* **deps:** update rust crate serde_json to v1.0.138 ([#344](https://github.com/FruitieX/tuya-mqtt/issues/344)) ([71f82de](https://github.com/FruitieX/tuya-mqtt/commit/71f82de0ca180dcc878bf3e796b39c94bc06450f))
+* **deps:** update rust crate serde_json to v1.0.139 ([#355](https://github.com/FruitieX/tuya-mqtt/issues/355)) ([fba4411](https://github.com/FruitieX/tuya-mqtt/commit/fba44115bd7f2296e8a09d115c6d1c0b3ee79862))
+* **deps:** update rust crate serde_json to v1.0.140 ([#364](https://github.com/FruitieX/tuya-mqtt/issues/364)) ([1a70a60](https://github.com/FruitieX/tuya-mqtt/commit/1a70a60eb4d8f93e3945460fa73609d0736cd116))
+* **deps:** update rust crate serde_json to v1.0.141 ([#415](https://github.com/FruitieX/tuya-mqtt/issues/415)) ([8d79d14](https://github.com/FruitieX/tuya-mqtt/commit/8d79d144bcb68c9916db0e5896973cf8c793b1f2))
+* **deps:** update rust crate tokio to v1.43.0 ([#330](https://github.com/FruitieX/tuya-mqtt/issues/330)) ([d8cba42](https://github.com/FruitieX/tuya-mqtt/commit/d8cba426638c75b7e13cf4fb27a418631f4519bf))
+* **deps:** update rust crate tokio to v1.44.0 ([#366](https://github.com/FruitieX/tuya-mqtt/issues/366)) ([f7bf969](https://github.com/FruitieX/tuya-mqtt/commit/f7bf969823ffc48355ba0c15499a3467c208e290))
+* **deps:** update rust crate tokio to v1.44.1 ([#371](https://github.com/FruitieX/tuya-mqtt/issues/371)) ([7b635d9](https://github.com/FruitieX/tuya-mqtt/commit/7b635d9e157d5a160062b23af4da9f9b9de13927))
+* **deps:** update rust crate tokio to v1.44.2 ([#383](https://github.com/FruitieX/tuya-mqtt/issues/383)) ([7f26505](https://github.com/FruitieX/tuya-mqtt/commit/7f26505bb410904d7528eeeb0c37523933f0614d))
+* **deps:** update rust crate tokio to v1.45.0 ([#391](https://github.com/FruitieX/tuya-mqtt/issues/391)) ([d7ad7a4](https://github.com/FruitieX/tuya-mqtt/commit/d7ad7a4980a292fa8f22823af5c6fa3393dd1e2a))
+* **deps:** update rust crate tokio to v1.45.1 ([#396](https://github.com/FruitieX/tuya-mqtt/issues/396)) ([1d9b188](https://github.com/FruitieX/tuya-mqtt/commit/1d9b188bd23813bb0921303424f9477610535966))
+* **deps:** update rust crate tokio to v1.46.0 ([#409](https://github.com/FruitieX/tuya-mqtt/issues/409)) ([b0524c2](https://github.com/FruitieX/tuya-mqtt/commit/b0524c2de1507447e9c2c2730150d1830460cc9a))
+* **deps:** update rust crate tokio to v1.46.1 ([#410](https://github.com/FruitieX/tuya-mqtt/issues/410)) ([e1e4ab7](https://github.com/FruitieX/tuya-mqtt/commit/e1e4ab771b30d195b14df84fde4a8ae25e5d9fec))
+
 ## [0.5.1](https://github.com/FruitieX/tuya-mqtt/compare/v0.5.0...v0.5.1) (2025-01-08)
 
 
