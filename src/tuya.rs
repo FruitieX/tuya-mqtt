@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use futures::future::select_all;
 use futures::future::FutureExt;
-use log::debug;
+use log::{debug, warn};
 use rumqttc::QoS;
 use rust_async_tuyapi::mesparse::CommandType;
 use rust_async_tuyapi::PayloadStruct;
@@ -27,6 +27,26 @@ const DEFAULT_MODE_FIELD: &str = "21";
 const DEFAULT_BRIGHTNESS_FIELD: &str = "22";
 const DEFAULT_COLOR_TEMP_FIELD: &str = "23";
 const DEFAULT_COLOR_FIELD: &str = "24";
+
+/// Polling interval for querying device status (in milliseconds)
+/// Community research shows aggressive polling (< 10s) can trigger resource
+/// exhaustion in v3.4 device firmware, leading to "stuck" devices
+const POLL_INTERVAL_MS: u64 = 3_000;
+
+/// Heartbeat interval to keep TCP connection alive (in milliseconds)
+/// v3.4 devices may close idle connections; heartbeats prevent this
+const HEARTBEAT_INTERVAL_MS: u64 = 15_000;
+
+/// Timeout for individual operations (connect, get, set)
+const OPERATION_TIMEOUT_MS: u64 = 5_000;
+
+/// Timeout for initial connection establishment
+const CONNECT_TIMEOUT_MS: u64 = 9_000;
+
+/// Timeout for receiving messages before considering connection stale
+/// Must be longer than HEARTBEAT_INTERVAL_MS + OPERATION_TIMEOUT_MS to avoid
+/// false positives when waiting for heartbeat responses
+const RECEIVE_TIMEOUT_MS: u64 = 25_000;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TuyaDeviceConfig {
@@ -241,8 +261,15 @@ pub async fn connect_and_poll(
     let mut rx = {
         debug!("Connecting to {}", device_config.name);
         let mut tuya_device = tuya_device.write().await;
-        timeout(Duration::from_millis(9000), tuya_device.connect()).await??
+        timeout(
+            Duration::from_millis(CONNECT_TIMEOUT_MS),
+            tuya_device.connect(),
+        )
+        .await??
     };
+
+    // Signal successful connection for backoff reset
+    debug!("Successfully connected to {}", device_config.name);
 
     // Tuya -> MQTT
     let tuya2mqtt = {
@@ -254,11 +281,26 @@ pub async fn connect_and_poll(
             // ControlNew message response
             let mut ignore_next = false;
 
-            while let Ok(messages) = rx
-                .recv()
-                .await
-                .context("Error receiving message from device")?
-            {
+            loop {
+                // Add timeout on receive to detect stale connections that don't close cleanly
+                let messages = timeout(Duration::from_millis(RECEIVE_TIMEOUT_MS), rx.recv()).await;
+
+                let messages = match messages {
+                    Ok(Some(result)) => result?,
+                    Ok(None) => {
+                        // Channel closed
+                        return Err(anyhow!("Receive channel closed"));
+                    }
+                    Err(_) => {
+                        // Timeout - connection may be stale
+                        warn!(
+                            "Receive timeout on {}, connection may be stale",
+                            device_config.name
+                        );
+                        return Err(anyhow!("Receive timeout - connection stale"));
+                    }
+                };
+
                 if ignore_next {
                     ignore_next = false;
                     continue;
@@ -292,6 +334,7 @@ pub async fn connect_and_poll(
                 }
             }
 
+            #[allow(unreachable_code)]
             anyhow::Ok(())
         }
     };
@@ -299,6 +342,7 @@ pub async fn connect_and_poll(
     // MQTT -> Tuya
     let mqtt2tuya = {
         let tuya_device = tuya_device.clone();
+        let device_config = device_config.clone();
 
         let mut mqtt_rx = mqtt_rx_map
             .get(&device_config.id)
@@ -321,7 +365,11 @@ pub async fn connect_and_poll(
                 let dps = mqtt_to_tuya(res, &device_config);
 
                 let mut tuya_device = tuya_device.write().await;
-                timeout(Duration::from_millis(3000), tuya_device.set_values(dps)).await??;
+                timeout(
+                    Duration::from_millis(OPERATION_TIMEOUT_MS),
+                    tuya_device.set_values(dps),
+                )
+                .await??;
             }
 
             #[allow(unreachable_code)]
@@ -329,28 +377,72 @@ pub async fn connect_and_poll(
         }
     };
 
-    // Tuya status poll
-    let tuya_poll = async move {
-        loop {
-            let mut tuya_device = tuya_device.write().await;
-            timeout(
-                Duration::from_millis(3000),
-                tuya_device.get(Payload::Struct(PayloadStruct {
-                    dev_id: id.to_string(),
-                    gw_id: Some(id.to_string()),
-                    uid: Some(id.to_string()),
-                    t: Some("0".to_string()),
-                    dp_id: None,
-                    dps: None,
-                })),
-            )
-            .await??;
+    // Tuya status poll - reduced frequency to prevent device memory corruption
+    let tuya_poll = {
+        let tuya_device = tuya_device.clone();
+        let id = id.clone();
 
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+        async move {
+            loop {
+                {
+                    let mut tuya_device = tuya_device.write().await;
+                    timeout(
+                        Duration::from_millis(OPERATION_TIMEOUT_MS),
+                        tuya_device.get(Payload::Struct(PayloadStruct {
+                            dev_id: id.to_string(),
+                            gw_id: Some(id.to_string()),
+                            uid: Some(id.to_string()),
+                            t: Some("0".to_string()),
+                            dp_id: None,
+                            dps: None,
+                        })),
+                    )
+                    .await??;
+                }
+
+                // Reduced from 1s to 30s - aggressive polling triggers v3.4 firmware bugs
+                tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+            }
+
+            #[allow(unreachable_code)]
+            anyhow::Ok(())
         }
+    };
 
-        #[allow(unreachable_code)]
-        anyhow::Ok(())
+    // Heartbeat task - keeps v3.4 connections alive
+    let heartbeat = {
+        let tuya_device = tuya_device.clone();
+        let device_name = device_config.name.clone();
+
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(HEARTBEAT_INTERVAL_MS)).await;
+
+                let mut tuya_device = tuya_device.write().await;
+                let result = timeout(
+                    Duration::from_millis(OPERATION_TIMEOUT_MS),
+                    tuya_device.heartbeat(),
+                )
+                .await;
+
+                match result {
+                    Ok(Ok(())) => {
+                        debug!("Heartbeat sent to {}", device_name);
+                    }
+                    Ok(Err(e)) => {
+                        warn!("Heartbeat failed for {}: {:?}", device_name, e);
+                        return Err(anyhow!("Heartbeat failed: {:?}", e));
+                    }
+                    Err(_) => {
+                        warn!("Heartbeat timeout for {}", device_name);
+                        return Err(anyhow!("Heartbeat timeout"));
+                    }
+                }
+            }
+
+            #[allow(unreachable_code)]
+            anyhow::Ok(())
+        }
     };
 
     // Loop until either future encounters an error
@@ -358,13 +450,22 @@ pub async fn connect_and_poll(
         mqtt2tuya.boxed(),
         tuya2mqtt.boxed(),
         tuya_poll.boxed(),
+        heartbeat.boxed(),
     ])
     .await
     .0
 }
 
+/// Maximum reconnection delay (10 seconds)
+const MAX_RECONNECT_DELAY_MS: u64 = 10_000;
+
+/// Initial reconnection delay (1 second)
+const INITIAL_RECONNECT_DELAY_MS: u64 = 1_000;
+
 pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient) {
     tokio::spawn(async move {
+        let mut reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
+
         loop {
             let device_config = device_config.clone();
             let mqtt_client = mqtt_client.clone();
@@ -372,12 +473,38 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
             let name = device_config.name.clone();
             let res = connect_and_poll(device_config, mqtt_client).await;
 
-            if let Err(e) = res {
-                eprintln!("Error while polling {}: {:?}", name, e);
-            }
+            match res {
+                Ok(()) => {
+                    // This shouldn't happen as connect_and_poll runs indefinitely
+                    reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
+                }
+                Err(e) => {
+                    // Check if this was a connection-phase error or a runtime error
+                    // Runtime errors (after successful connection) should reset backoff
+                    let error_str = format!("{:?}", e);
+                    let is_connection_error = error_str.contains("connect")
+                        || error_str.contains("Connect")
+                        || error_str.contains("timeout")
+                        || error_str.contains("InvalidSessionKey");
 
-            // Wait before reconnecting
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+                    if !is_connection_error {
+                        // Connection was established but failed later - reset backoff
+                        reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
+                    }
+
+                    eprintln!(
+                        "Error while polling {}: {:?}, retrying in {:?}",
+                        name, e, reconnect_delay
+                    );
+
+                    // Wait before reconnecting with exponential backoff
+                    tokio::time::sleep(reconnect_delay).await;
+
+                    // Exponential backoff: double the delay, up to maximum
+                    reconnect_delay =
+                        (reconnect_delay * 2).min(Duration::from_millis(MAX_RECONNECT_DELAY_MS));
+                }
+            }
         }
     });
 }
