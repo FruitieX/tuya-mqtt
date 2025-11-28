@@ -31,7 +31,11 @@ const DEFAULT_COLOR_FIELD: &str = "24";
 /// Polling interval for querying device status (in milliseconds)
 /// Community research shows aggressive polling (< 10s) can trigger resource
 /// exhaustion in v3.4 device firmware, leading to "stuck" devices
-const POLL_INTERVAL_MS: u64 = 3_000;
+const POLL_INTERVAL_MS: u64 = 2_000;
+
+/// Maximum random jitter added to polling interval (in milliseconds)
+/// This spreads out polling across devices to avoid thundering herd
+const POLL_JITTER_MS: u64 = 1_000;
 
 /// Heartbeat interval to keep TCP connection alive (in milliseconds)
 /// v3.4 devices may close idle connections; heartbeats prevent this
@@ -384,6 +388,11 @@ pub async fn connect_and_poll(
 
         async move {
             loop {
+                // Add random jitter before polling to spread out requests across devices
+                let jitter: u64 = rand::random::<u64>() % (POLL_JITTER_MS + 1);
+                let sleep_duration = Duration::from_millis(POLL_INTERVAL_MS + jitter);
+                tokio::time::sleep(sleep_duration).await;
+
                 {
                     let mut tuya_device = tuya_device.write().await;
                     timeout(
@@ -399,9 +408,6 @@ pub async fn connect_and_poll(
                     )
                     .await??;
                 }
-
-                // Reduced from 1s to 30s - aggressive polling triggers v3.4 firmware bugs
-                tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
             }
 
             #[allow(unreachable_code)]
