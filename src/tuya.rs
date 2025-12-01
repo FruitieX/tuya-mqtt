@@ -31,7 +31,7 @@ const DEFAULT_COLOR_FIELD: &str = "24";
 /// Polling interval for querying device status (in milliseconds)
 /// Community research shows aggressive polling (< 10s) can trigger resource
 /// exhaustion in v3.4 device firmware, leading to "stuck" devices
-const POLL_INTERVAL_MS: u64 = 2_000;
+const POLL_INTERVAL_MS: u64 = 10_000;
 
 /// Maximum random jitter added to polling interval (in milliseconds)
 /// This spreads out polling across devices to avoid thundering herd
@@ -40,6 +40,10 @@ const POLL_JITTER_MS: u64 = 1_000;
 /// Heartbeat interval to keep TCP connection alive (in milliseconds)
 /// v3.4 devices may close idle connections; heartbeats prevent this
 const HEARTBEAT_INTERVAL_MS: u64 = 15_000;
+
+/// Maximum random jitter added to heartbeat interval (in milliseconds)
+/// This breaks synchronization between devices after reconnects
+const HEARTBEAT_JITTER_MS: u64 = 5_000;
 
 /// Timeout for individual operations (connect, get, set)
 const OPERATION_TIMEOUT_MS: u64 = 5_000;
@@ -275,7 +279,11 @@ pub async fn connect_and_poll(
     // Signal successful connection for backoff reset
     debug!("Successfully connected to {}", device_config.name);
 
-    // Tuya -> MQTT
+    // Channel for decoupling MQTT publishing from Tuya receive loop
+    // This prevents MQTT slowness from causing Tuya connection timeouts
+    let (mqtt_tx, mut mqtt_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
+
+    // Tuya -> MQTT (send to channel, non-blocking)
     let tuya2mqtt = {
         let device_config = device_config.clone();
         let mqtt_client = mqtt_client.clone();
@@ -327,13 +335,10 @@ pub async fn connect_and_poll(
                         .clone()
                         .unwrap_or_else(|| mqtt_client.topic.replacen('+', &device_config.id, 1));
 
-                    let res = mqtt_client
-                        .client
-                        .publish(topic, QoS::AtLeastOnce, true, json)
-                        .await;
-
-                    if let Err(e) = res {
-                        eprintln!("Error while publishing to MQTT: {:?}", e);
+                    // Send to channel instead of blocking on MQTT publish
+                    // Use try_send to avoid blocking if channel is full (drop old state)
+                    if let Err(e) = mqtt_tx.try_send((topic, json)) {
+                        debug!("MQTT channel full, dropping message: {:?}", e);
                     }
                 }
             }
@@ -415,6 +420,29 @@ pub async fn connect_and_poll(
         }
     };
 
+    // MQTT publisher task - publishes messages from channel to MQTT broker
+    // Decoupled from Tuya receive loop to prevent MQTT slowness from causing timeouts
+    let mqtt_publisher = {
+        let mqtt_client = mqtt_client.clone();
+        let device_name = device_config.name.clone();
+
+        async move {
+            while let Some((topic, json)) = mqtt_rx.recv().await {
+                let res = mqtt_client
+                    .client
+                    .publish(topic, QoS::AtLeastOnce, true, json)
+                    .await;
+
+                if let Err(e) = res {
+                    warn!("Error publishing to MQTT for {}: {:?}", device_name, e);
+                }
+            }
+
+            // Channel closed - this shouldn't happen during normal operation
+            Err(anyhow!("MQTT publish channel closed"))
+        }
+    };
+
     // Heartbeat task - keeps v3.4 connections alive
     let heartbeat = {
         let tuya_device = tuya_device.clone();
@@ -422,7 +450,9 @@ pub async fn connect_and_poll(
 
         async move {
             loop {
-                tokio::time::sleep(Duration::from_millis(HEARTBEAT_INTERVAL_MS)).await;
+                // Add random jitter to break synchronization between devices
+                let jitter: u64 = rand::random::<u64>() % (HEARTBEAT_JITTER_MS + 1);
+                tokio::time::sleep(Duration::from_millis(HEARTBEAT_INTERVAL_MS + jitter)).await;
 
                 let mut tuya_device = tuya_device.write().await;
                 let result = timeout(
@@ -457,13 +487,14 @@ pub async fn connect_and_poll(
         tuya2mqtt.boxed(),
         tuya_poll.boxed(),
         heartbeat.boxed(),
+        mqtt_publisher.boxed(),
     ])
     .await
     .0
 }
 
-/// Maximum reconnection delay (10 seconds)
-const MAX_RECONNECT_DELAY_MS: u64 = 10_000;
+/// Maximum reconnection delay (60 seconds)
+const MAX_RECONNECT_DELAY_MS: u64 = 60_000;
 
 /// Initial reconnection delay (1 second)
 const INITIAL_RECONNECT_DELAY_MS: u64 = 1_000;
@@ -485,16 +516,16 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                     reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
                 }
                 Err(e) => {
-                    // Check if this was a connection-phase error or a runtime error
-                    // Runtime errors (after successful connection) should reset backoff
                     let error_str = format!("{:?}", e);
-                    let is_connection_error = error_str.contains("connect")
-                        || error_str.contains("Connect")
-                        || error_str.contains("timeout")
-                        || error_str.contains("InvalidSessionKey");
 
-                    if !is_connection_error {
-                        // Connection was established but failed later - reset backoff
+                    // Only reset backoff for transient runtime errors that indicate
+                    // the connection was working but hit a minor parsing issue.
+                    // These are recoverable and don't indicate persistent problems.
+                    let is_transient_error = error_str.contains("Data was incomplete")
+                        || error_str.contains("still contains data after parsing");
+
+                    if is_transient_error {
+                        // Minor parsing glitch - reset backoff
                         reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
                     }
 
@@ -507,6 +538,8 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                     tokio::time::sleep(reconnect_delay).await;
 
                     // Exponential backoff: double the delay, up to maximum
+                    // For persistent failures (host unreachable, timeouts, deadlines),
+                    // this will back off to 60s to avoid log spam
                     reconnect_delay =
                         (reconnect_delay * 2).min(Duration::from_millis(MAX_RECONNECT_DELAY_MS));
                 }
