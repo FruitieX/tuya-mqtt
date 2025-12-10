@@ -5,6 +5,7 @@ use crate::tuya::init_tuya;
 mod config;
 mod mqtt;
 mod tuya;
+mod tuyapi;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

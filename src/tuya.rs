@@ -1,18 +1,20 @@
 use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use futures::future::select_all;
 use futures::future::FutureExt;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use rumqttc::QoS;
-use rust_async_tuyapi::mesparse::CommandType;
-use rust_async_tuyapi::PayloadStruct;
-use rust_async_tuyapi::{tuyadevice::TuyaDevice, Payload};
+use crate::tuyapi::mesparse::CommandType;
+use crate::tuyapi::PayloadStruct;
+use crate::tuyapi::{tuyadevice::TuyaDevice, Payload};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{net::IpAddr, str::FromStr, time::Duration};
-use tokio::sync::RwLock;
-use tokio::time::timeout;
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::time::{timeout, Instant};
 
 use crate::mqtt::Capabilities;
 use crate::mqtt::Ct;
@@ -30,15 +32,17 @@ const DEFAULT_COLOR_FIELD: &str = "24";
 
 /// Polling interval for querying device status (in milliseconds)
 /// Community research shows aggressive polling (< 10s) can trigger resource
-/// exhaustion in v3.4 device firmware, leading to "stuck" devices
-const POLL_INTERVAL_MS: u64 = 10_000;
+/// exhaustion in v3.4 device firmware, leading to "stuck" devices.
+/// Increased to 15s for better device stability.
+const POLL_INTERVAL_MS: u64 = 15_000;
 
 /// Maximum random jitter added to polling interval (in milliseconds)
 /// This spreads out polling across devices to avoid thundering herd
-const POLL_JITTER_MS: u64 = 1_000;
+const POLL_JITTER_MS: u64 = 2_000;
 
 /// Heartbeat interval to keep TCP connection alive (in milliseconds)
-/// v3.4 devices may close idle connections; heartbeats prevent this
+/// v3.4 devices may close idle connections; heartbeats prevent this.
+/// Note: heartbeat is skipped if other activity occurred recently.
 const HEARTBEAT_INTERVAL_MS: u64 = 15_000;
 
 /// Maximum random jitter added to heartbeat interval (in milliseconds)
@@ -54,7 +58,226 @@ const CONNECT_TIMEOUT_MS: u64 = 9_000;
 /// Timeout for receiving messages before considering connection stale
 /// Must be longer than HEARTBEAT_INTERVAL_MS + OPERATION_TIMEOUT_MS to avoid
 /// false positives when waiting for heartbeat responses
-const RECEIVE_TIMEOUT_MS: u64 = 25_000;
+const RECEIVE_TIMEOUT_MS: u64 = 30_000;
+
+/// Minimum time between commands sent to device (in milliseconds)
+/// This prevents overwhelming the device with rapid-fire commands
+const COMMAND_THROTTLE_MS: u64 = 1_000;
+
+/// If any activity occurred within this time, skip the heartbeat
+/// Should be less than HEARTBEAT_INTERVAL_MS
+const HEARTBEAT_SKIP_IF_ACTIVITY_MS: u64 = 10_000;
+
+/// Maximum number of events to keep in the timeline ring buffer
+const EVENT_LOG_CAPACITY: usize = 100;
+
+// ============================================================================
+// Event Timeline Logging
+// ============================================================================
+
+/// Types of events that can be logged in the device timeline
+#[derive(Debug, Clone)]
+pub enum DeviceEventType {
+    /// TCP connection established
+    Connected,
+    /// TCP connection closed (intentional disconnect)
+    Disconnected,
+    /// Heartbeat sent to device
+    HeartbeatSent,
+    /// Status poll request sent
+    PollSent,
+    /// Command sent from MQTT (contains DPS JSON)
+    CommandSent(String),
+    /// Message received from device (contains command type and payload summary)
+    MessageReceived(String),
+    /// Error occurred (contains error description)
+    Error(String),
+    /// Timeout occurred (operation name)
+    Timeout(String),
+    /// Throttled - command was delayed due to rate limiting
+    Throttled { delayed_ms: u64 },
+    /// Heartbeat skipped due to recent activity
+    HeartbeatSkipped { last_activity_ms: u64 },
+    /// Connection attempt started
+    ConnectAttempt,
+    /// Receive timeout - connection may be stale
+    ReceiveTimeout,
+}
+
+impl std::fmt::Display for DeviceEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceEventType::Connected => write!(f, "CONNECTED"),
+            DeviceEventType::Disconnected => write!(f, "DISCONNECTED"),
+            DeviceEventType::HeartbeatSent => write!(f, "HEARTBEAT_SENT"),
+            DeviceEventType::PollSent => write!(f, "POLL_SENT"),
+            DeviceEventType::CommandSent(dps) => write!(f, "COMMAND_SENT: {}", dps),
+            DeviceEventType::MessageReceived(msg) => write!(f, "MESSAGE_RECEIVED: {}", msg),
+            DeviceEventType::Error(e) => write!(f, "ERROR: {}", e),
+            DeviceEventType::Timeout(op) => write!(f, "TIMEOUT: {}", op),
+            DeviceEventType::Throttled { delayed_ms } => write!(f, "THROTTLED: delayed {}ms", delayed_ms),
+            DeviceEventType::HeartbeatSkipped { last_activity_ms } => {
+                write!(f, "HEARTBEAT_SKIPPED: last activity {}ms ago", last_activity_ms)
+            }
+            DeviceEventType::ConnectAttempt => write!(f, "CONNECT_ATTEMPT"),
+            DeviceEventType::ReceiveTimeout => write!(f, "RECEIVE_TIMEOUT"),
+        }
+    }
+}
+
+/// A single event in the device timeline
+#[derive(Debug, Clone)]
+pub struct DeviceEvent {
+    /// Timestamp when the event occurred
+    pub timestamp: DateTime<Utc>,
+    /// Monotonic instant for precise timing calculations
+    pub instant: u64,
+    /// The type of event
+    pub event_type: DeviceEventType,
+}
+
+/// Ring buffer of recent device events for debugging
+#[derive(Debug)]
+pub struct DeviceEventLog {
+    device_name: String,
+    device_id: String,
+    device_version: String,
+    events: VecDeque<DeviceEvent>,
+    capacity: usize,
+    /// Monotonic start time for calculating relative timestamps
+    start_instant: Instant,
+}
+
+impl DeviceEventLog {
+    pub fn new(device_name: String, device_id: String, device_version: String) -> Self {
+        Self {
+            device_name,
+            device_id,
+            device_version,
+            events: VecDeque::with_capacity(EVENT_LOG_CAPACITY),
+            capacity: EVENT_LOG_CAPACITY,
+            start_instant: Instant::now(),
+        }
+    }
+
+    /// Add an event to the timeline
+    pub fn log(&mut self, event_type: DeviceEventType) {
+        if self.events.len() >= self.capacity {
+            self.events.pop_front();
+        }
+
+        let event = DeviceEvent {
+            timestamp: Utc::now(),
+            instant: self.start_instant.elapsed().as_millis() as u64,
+            event_type,
+        };
+
+        self.events.push_back(event);
+    }
+
+    /// Dump the timeline to stdout in a format suitable for analysis
+    pub fn dump_timeline(&self, failure_reason: &str) {
+        let separator_eq = "=".repeat(80);
+        let separator_dash = "-".repeat(80);
+
+        eprintln!("\n{}", separator_eq);
+        eprintln!("DEVICE FAILURE TIMELINE DUMP");
+        eprintln!("{}", separator_eq);
+        eprintln!("Device Name: {}", self.device_name);
+        eprintln!("Device ID: {}", self.device_id);
+        eprintln!("Protocol Version: {}", self.device_version);
+        eprintln!("Failure Reason: {}", failure_reason);
+        eprintln!("Dump Time: {}", Utc::now().to_rfc3339());
+        eprintln!("Total Events: {}", self.events.len());
+        eprintln!("{}", separator_dash);
+        eprintln!("TIMELINE (oldest first):");
+        eprintln!("{}", separator_dash);
+
+        for (i, event) in self.events.iter().enumerate() {
+            let relative_ms = event.instant;
+            eprintln!(
+                "[{:04}] +{:>8}ms | {} | {}",
+                i,
+                relative_ms,
+                event.timestamp.format("%H:%M:%S%.3f"),
+                event.event_type
+            );
+        }
+
+        eprintln!("{}", separator_dash);
+
+        // Print summary statistics
+        let mut heartbeats = 0;
+        let mut polls = 0;
+        let mut commands = 0;
+        let mut errors = 0;
+        let mut timeouts = 0;
+        let mut throttles = 0;
+
+        for event in &self.events {
+            match &event.event_type {
+                DeviceEventType::HeartbeatSent => heartbeats += 1,
+                DeviceEventType::PollSent => polls += 1,
+                DeviceEventType::CommandSent(_) => commands += 1,
+                DeviceEventType::Error(_) => errors += 1,
+                DeviceEventType::Timeout(_) => timeouts += 1,
+                DeviceEventType::Throttled { .. } => throttles += 1,
+                _ => {}
+            }
+        }
+
+        eprintln!("SUMMARY:");
+        eprintln!("  Heartbeats: {}", heartbeats);
+        eprintln!("  Polls: {}", polls);
+        eprintln!("  Commands: {}", commands);
+        eprintln!("  Errors: {}", errors);
+        eprintln!("  Timeouts: {}", timeouts);
+        eprintln!("  Throttled: {}", throttles);
+
+        // Calculate time between last few operations
+        if self.events.len() >= 2 {
+            eprintln!("{}", separator_dash);
+            eprintln!("INTER-EVENT TIMING (last 10):");
+            let recent: Vec<_> = self.events.iter().rev().take(10).collect();
+            for window in recent.windows(2) {
+                let delta = window[0].instant.saturating_sub(window[1].instant);
+                eprintln!(
+                    "  {} -> {} : {}ms",
+                    window[1].event_type,
+                    window[0].event_type,
+                    delta
+                );
+            }
+        }
+
+        eprintln!("{}\n", separator_eq);
+    }
+}
+
+// ============================================================================
+// Command Queue for Throttling
+// ============================================================================
+
+/// Commands that can be sent to the device
+#[derive(Debug)]
+pub enum DeviceCommand {
+    /// Send a set_values command with DPS payload
+    SetValues(serde_json::Value),
+    /// Send a status poll (get) request
+    Poll,
+    /// Send a heartbeat
+    Heartbeat,
+}
+
+/// Shared state for activity tracking and throttling
+pub struct DeviceState {
+    /// Last time any command was sent to the device (milliseconds since start)
+    pub last_command_time: AtomicU64,
+    /// Event log for timeline debugging
+    pub event_log: Mutex<DeviceEventLog>,
+    /// Start instant for monotonic timing
+    pub start_instant: Instant,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TuyaDeviceConfig {
@@ -82,7 +305,7 @@ struct TuyaDpsPayload {
 }
 
 pub fn tuya_to_mqtt(
-    messages: Vec<rust_async_tuyapi::mesparse::Message>,
+    messages: Vec<crate::tuyapi::mesparse::Message>,
     config: &TuyaDeviceConfig,
 ) -> Result<MqttDevice> {
     let first = messages
@@ -248,22 +471,178 @@ pub fn mqtt_to_tuya(mqtt_device: MqttDevice, device_config: &TuyaDeviceConfig) -
     serde_json::Value::Object(dps)
 }
 
-pub async fn connect_and_poll(
+impl DeviceState {
+    pub fn new(device_name: String, device_id: String, device_version: String) -> Self {
+        Self {
+            last_command_time: AtomicU64::new(0),
+            event_log: Mutex::new(DeviceEventLog::new(device_name, device_id, device_version)),
+            start_instant: Instant::now(),
+        }
+    }
+
+    /// Get elapsed time since start in milliseconds
+    pub fn elapsed_ms(&self) -> u64 {
+        self.start_instant.elapsed().as_millis() as u64
+    }
+
+    /// Update last command time and return how long we need to wait for throttling
+    pub fn throttle_delay(&self) -> Duration {
+        let now = self.elapsed_ms();
+        let last = self.last_command_time.load(Ordering::Relaxed);
+        let elapsed = now.saturating_sub(last);
+
+        if elapsed >= COMMAND_THROTTLE_MS {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(COMMAND_THROTTLE_MS - elapsed)
+        }
+    }
+
+    /// Mark that a command was sent
+    pub fn mark_command_sent(&self) {
+        self.last_command_time.store(self.elapsed_ms(), Ordering::Relaxed);
+    }
+
+    /// Check if heartbeat should be skipped due to recent activity
+    pub fn should_skip_heartbeat(&self) -> Option<u64> {
+        let now = self.elapsed_ms();
+        let last = self.last_command_time.load(Ordering::Relaxed);
+        let elapsed = now.saturating_sub(last);
+
+        if elapsed < HEARTBEAT_SKIP_IF_ACTIVITY_MS {
+            Some(elapsed)
+        } else {
+            None
+        }
+    }
+
+    /// Log an event
+    pub async fn log_event(&self, event_type: DeviceEventType) {
+        let mut log = self.event_log.lock().await;
+        log.log(event_type);
+    }
+
+    /// Dump timeline on failure
+    pub async fn dump_timeline(&self, failure_reason: &str) {
+        let log = self.event_log.lock().await;
+        log.dump_timeline(failure_reason);
+    }
+}
+
+/// Process commands from the queue with throttling
+async fn process_command(
+    tuya_device: &Arc<RwLock<TuyaDevice>>,
+    device_state: &Arc<DeviceState>,
+    device_id: &str,
+    command: DeviceCommand,
+) -> Result<()> {
+    // Apply throttling
+    let delay = device_state.throttle_delay();
+    if !delay.is_zero() {
+        device_state.log_event(DeviceEventType::Throttled {
+            delayed_ms: delay.as_millis() as u64,
+        }).await;
+        tokio::time::sleep(delay).await;
+    }
+
+    // Mark command sent time
+    device_state.mark_command_sent();
+
+    // Execute the command
+    let mut tuya = tuya_device.write().await;
+
+    match command {
+        DeviceCommand::SetValues(dps) => {
+            let dps_str = serde_json::to_string(&dps).unwrap_or_default();
+            device_state.log_event(DeviceEventType::CommandSent(dps_str)).await;
+
+            let result = timeout(
+                Duration::from_millis(OPERATION_TIMEOUT_MS),
+                tuya.set_values(dps),
+            ).await;
+
+            match result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => {
+                    device_state.log_event(DeviceEventType::Error(format!("set_values: {:?}", e))).await;
+                    Err(anyhow!("set_values failed: {:?}", e))
+                }
+                Err(_) => {
+                    device_state.log_event(DeviceEventType::Timeout("set_values".to_string())).await;
+                    Err(anyhow!("set_values timeout"))
+                }
+            }
+        }
+        DeviceCommand::Poll => {
+            device_state.log_event(DeviceEventType::PollSent).await;
+
+            let result = timeout(
+                Duration::from_millis(OPERATION_TIMEOUT_MS),
+                tuya.get(Payload::Struct(PayloadStruct {
+                    dev_id: device_id.to_string(),
+                    gw_id: Some(device_id.to_string()),
+                    uid: Some(device_id.to_string()),
+                    t: Some("0".to_string()),
+                    dp_id: None,
+                    dps: None,
+                })),
+            ).await;
+
+            match result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => {
+                    device_state.log_event(DeviceEventType::Error(format!("poll: {:?}", e))).await;
+                    Err(anyhow!("poll failed: {:?}", e))
+                }
+                Err(_) => {
+                    device_state.log_event(DeviceEventType::Timeout("poll".to_string())).await;
+                    Err(anyhow!("poll timeout"))
+                }
+            }
+        }
+        DeviceCommand::Heartbeat => {
+            // Check if we should skip heartbeat due to recent activity
+            if let Some(last_activity_ms) = device_state.should_skip_heartbeat() {
+                device_state.log_event(DeviceEventType::HeartbeatSkipped { last_activity_ms }).await;
+                return Ok(());
+            }
+
+            device_state.log_event(DeviceEventType::HeartbeatSent).await;
+
+            let result = timeout(
+                Duration::from_millis(OPERATION_TIMEOUT_MS),
+                tuya.heartbeat(),
+            ).await;
+
+            match result {
+                Ok(Ok(())) => {
+                    debug!("Heartbeat sent");
+                    Ok(())
+                }
+                Ok(Err(e)) => {
+                    device_state.log_event(DeviceEventType::Error(format!("heartbeat: {:?}", e))).await;
+                    Err(anyhow!("heartbeat failed: {:?}", e))
+                }
+                Err(_) => {
+                    device_state.log_event(DeviceEventType::Timeout("heartbeat".to_string())).await;
+                    Err(anyhow!("heartbeat timeout"))
+                }
+            }
+        }
+    }
+}
+
+pub async fn connect_and_poll_with_device(
     device_config: TuyaDeviceConfig,
     mqtt_client: MqttClient,
+    tuya_device: Arc<RwLock<TuyaDevice>>,
+    device_state: Arc<DeviceState>,
 ) -> Result<()> {
     let mqtt_rx_map = mqtt_client.rx_map.clone();
     let id = device_config.id.clone();
 
-    let tuya_device = Arc::new(RwLock::new(
-        TuyaDevice::new(
-            &device_config.version,
-            &id,
-            Some(&device_config.local_key),
-            IpAddr::from_str(&device_config.ip).unwrap(),
-        )
-        .unwrap(),
-    ));
+    // Log connection attempt
+    device_state.log_event(DeviceEventType::ConnectAttempt).await;
 
     // Connect to the device
     let mut rx = {
@@ -276,17 +655,22 @@ pub async fn connect_and_poll(
         .await??
     };
 
-    // Signal successful connection for backoff reset
-    debug!("Successfully connected to {}", device_config.name);
+    // Log successful connection
+    device_state.log_event(DeviceEventType::Connected).await;
+    info!("Successfully connected to {} (v{})", device_config.name, device_config.version);
 
     // Channel for decoupling MQTT publishing from Tuya receive loop
     // This prevents MQTT slowness from causing Tuya connection timeouts
-    let (mqtt_tx, mut mqtt_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
+    let (mqtt_tx, mut mqtt_publish_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
+
+    // Command queue channel - all commands go through this for throttling
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<DeviceCommand>(32);
 
     // Tuya -> MQTT (send to channel, non-blocking)
     let tuya2mqtt = {
         let device_config = device_config.clone();
         let mqtt_client = mqtt_client.clone();
+        let device_state = device_state.clone();
 
         async move {
             // Ignore some garbage data that at least my Tuya lamps send after a
@@ -298,13 +682,30 @@ pub async fn connect_and_poll(
                 let messages = timeout(Duration::from_millis(RECEIVE_TIMEOUT_MS), rx.recv()).await;
 
                 let messages = match messages {
-                    Ok(Some(result)) => result?,
+                    Ok(Some(result)) => {
+                        match &result {
+                            Ok(msgs) => {
+                                // Log received message summary
+                                let summary = msgs.iter()
+                                    .map(|m| format!("{:?}", m.command))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                device_state.log_event(DeviceEventType::MessageReceived(summary)).await;
+                            }
+                            Err(e) => {
+                                device_state.log_event(DeviceEventType::Error(format!("recv: {:?}", e))).await;
+                            }
+                        }
+                        result?
+                    }
                     Ok(None) => {
                         // Channel closed
+                        device_state.log_event(DeviceEventType::Error("Receive channel closed".to_string())).await;
                         return Err(anyhow!("Receive channel closed"));
                     }
                     Err(_) => {
                         // Timeout - connection may be stale
+                        device_state.log_event(DeviceEventType::ReceiveTimeout).await;
                         warn!(
                             "Receive timeout on {}, connection may be stale",
                             device_config.name
@@ -348,10 +749,10 @@ pub async fn connect_and_poll(
         }
     };
 
-    // MQTT -> Tuya
-    let mqtt2tuya = {
-        let tuya_device = tuya_device.clone();
+    // MQTT -> Command Queue
+    let mqtt2cmd = {
         let device_config = device_config.clone();
+        let cmd_tx = cmd_tx.clone();
 
         let mut mqtt_rx = mqtt_rx_map
             .get(&device_config.id)
@@ -372,13 +773,7 @@ pub async fn connect_and_poll(
                 };
 
                 let dps = mqtt_to_tuya(res, &device_config);
-
-                let mut tuya_device = tuya_device.write().await;
-                timeout(
-                    Duration::from_millis(OPERATION_TIMEOUT_MS),
-                    tuya_device.set_values(dps),
-                )
-                .await??;
+                cmd_tx.send(DeviceCommand::SetValues(dps)).await?;
             }
 
             #[allow(unreachable_code)]
@@ -386,10 +781,9 @@ pub async fn connect_and_poll(
         }
     };
 
-    // Tuya status poll - reduced frequency to prevent device memory corruption
-    let tuya_poll = {
-        let tuya_device = tuya_device.clone();
-        let id = id.clone();
+    // Poll scheduler -> Command Queue
+    let poll_scheduler = {
+        let cmd_tx = cmd_tx.clone();
 
         async move {
             loop {
@@ -398,25 +792,44 @@ pub async fn connect_and_poll(
                 let sleep_duration = Duration::from_millis(POLL_INTERVAL_MS + jitter);
                 tokio::time::sleep(sleep_duration).await;
 
-                {
-                    let mut tuya_device = tuya_device.write().await;
-                    timeout(
-                        Duration::from_millis(OPERATION_TIMEOUT_MS),
-                        tuya_device.get(Payload::Struct(PayloadStruct {
-                            dev_id: id.to_string(),
-                            gw_id: Some(id.to_string()),
-                            uid: Some(id.to_string()),
-                            t: Some("0".to_string()),
-                            dp_id: None,
-                            dps: None,
-                        })),
-                    )
-                    .await??;
-                }
+                cmd_tx.send(DeviceCommand::Poll).await?;
             }
 
             #[allow(unreachable_code)]
             anyhow::Ok(())
+        }
+    };
+
+    // Heartbeat scheduler -> Command Queue
+    let heartbeat_scheduler = {
+        let cmd_tx = cmd_tx.clone();
+
+        async move {
+            loop {
+                // Add random jitter to break synchronization between devices
+                let jitter: u64 = rand::random::<u64>() % (HEARTBEAT_JITTER_MS + 1);
+                tokio::time::sleep(Duration::from_millis(HEARTBEAT_INTERVAL_MS + jitter)).await;
+
+                cmd_tx.send(DeviceCommand::Heartbeat).await?;
+            }
+
+            #[allow(unreachable_code)]
+            anyhow::Ok(())
+        }
+    };
+
+    // Command processor - processes commands from queue with throttling
+    let command_processor = {
+        let tuya_device = tuya_device.clone();
+        let device_state = device_state.clone();
+        let id = id.clone();
+
+        async move {
+            while let Some(command) = cmd_rx.recv().await {
+                process_command(&tuya_device, &device_state, &id, command).await?;
+            }
+
+            Err(anyhow!("Command channel closed"))
         }
     };
 
@@ -427,7 +840,7 @@ pub async fn connect_and_poll(
         let device_name = device_config.name.clone();
 
         async move {
-            while let Some((topic, json)) = mqtt_rx.recv().await {
+            while let Some((topic, json)) = mqtt_publish_rx.recv().await {
                 let res = mqtt_client
                     .client
                     .publish(topic, QoS::AtLeastOnce, true, json)
@@ -443,50 +856,13 @@ pub async fn connect_and_poll(
         }
     };
 
-    // Heartbeat task - keeps v3.4 connections alive
-    let heartbeat = {
-        let tuya_device = tuya_device.clone();
-        let device_name = device_config.name.clone();
-
-        async move {
-            loop {
-                // Add random jitter to break synchronization between devices
-                let jitter: u64 = rand::random::<u64>() % (HEARTBEAT_JITTER_MS + 1);
-                tokio::time::sleep(Duration::from_millis(HEARTBEAT_INTERVAL_MS + jitter)).await;
-
-                let mut tuya_device = tuya_device.write().await;
-                let result = timeout(
-                    Duration::from_millis(OPERATION_TIMEOUT_MS),
-                    tuya_device.heartbeat(),
-                )
-                .await;
-
-                match result {
-                    Ok(Ok(())) => {
-                        debug!("Heartbeat sent to {}", device_name);
-                    }
-                    Ok(Err(e)) => {
-                        warn!("Heartbeat failed for {}: {:?}", device_name, e);
-                        return Err(anyhow!("Heartbeat failed: {:?}", e));
-                    }
-                    Err(_) => {
-                        warn!("Heartbeat timeout for {}", device_name);
-                        return Err(anyhow!("Heartbeat timeout"));
-                    }
-                }
-            }
-
-            #[allow(unreachable_code)]
-            anyhow::Ok(())
-        }
-    };
-
-    // Loop until either future encounters an error
+    // Loop until any future encounters an error
     select_all(vec![
-        mqtt2tuya.boxed(),
+        mqtt2cmd.boxed(),
         tuya2mqtt.boxed(),
-        tuya_poll.boxed(),
-        heartbeat.boxed(),
+        poll_scheduler.boxed(),
+        heartbeat_scheduler.boxed(),
+        command_processor.boxed(),
         mqtt_publisher.boxed(),
     ])
     .await
@@ -499,16 +875,59 @@ const MAX_RECONNECT_DELAY_MS: u64 = 60_000;
 /// Initial reconnection delay (1 second)
 const INITIAL_RECONNECT_DELAY_MS: u64 = 1_000;
 
+/// Check if an error is likely related to a device becoming unresponsive
+/// These errors trigger a timeline dump for debugging
+fn is_device_failure_error(error_str: &str) -> bool {
+    error_str.contains("TcpStreamClosed")
+        || error_str.contains("Bad read from TcpStream")
+        || error_str.contains("Receive timeout")
+        || error_str.contains("connection stale")
+        || error_str.contains("heartbeat failed")
+        || error_str.contains("heartbeat timeout")
+}
+
+/// Check if an error is transient and should reset backoff
+fn is_transient_error(error_str: &str) -> bool {
+    error_str.contains("Data was incomplete")
+        || error_str.contains("still contains data after parsing")
+        || error_str.contains("InvalidSessionKey")  // ~1/256 chance, retry immediately
+}
+
 pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient) {
     tokio::spawn(async move {
         let mut reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
 
+        // Create shared device state for event logging and throttling
+        let device_state = Arc::new(DeviceState::new(
+            device_config.name.clone(),
+            device_config.id.clone(),
+            device_config.version.clone(),
+        ));
+
+        // Create shared device handle for explicit cleanup
+        let tuya_device = Arc::new(RwLock::new(
+            TuyaDevice::new(
+                &device_config.version,
+                &device_config.id,
+                Some(&device_config.local_key),
+                IpAddr::from_str(&device_config.ip).unwrap(),
+            )
+            .unwrap(),
+        ));
+
         loop {
             let device_config = device_config.clone();
             let mqtt_client = mqtt_client.clone();
+            let tuya_device = tuya_device.clone();
+            let device_state = device_state.clone();
 
             let name = device_config.name.clone();
-            let res = connect_and_poll(device_config, mqtt_client).await;
+            let res = connect_and_poll_with_device(
+                device_config,
+                mqtt_client,
+                tuya_device.clone(),
+                device_state.clone(),
+            ).await;
 
             match res {
                 Ok(()) => {
@@ -518,21 +937,38 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                 Err(e) => {
                     let error_str = format!("{:?}", e);
 
-                    // Only reset backoff for transient runtime errors that indicate
-                    // the connection was working but hit a minor parsing issue.
-                    // These are recoverable and don't indicate persistent problems.
-                    let is_transient_error = error_str.contains("Data was incomplete")
-                        || error_str.contains("still contains data after parsing");
+                    // Log the error event
+                    device_state.log_event(DeviceEventType::Error(error_str.clone())).await;
 
-                    if is_transient_error {
-                        // Minor parsing glitch - reset backoff
+                    // Check if this is a device failure that warrants timeline dump
+                    if is_device_failure_error(&error_str) {
+                        // Dump the timeline for debugging
+                        device_state.dump_timeline(&error_str).await;
+                    }
+
+                    // Check if this is a transient error that should reset backoff
+                    if is_transient_error(&error_str) {
+                        // Minor issue - reset backoff for quick retry
                         reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
+                        info!("Transient error on {}, retrying quickly", name);
                     }
 
                     eprintln!(
                         "Error while polling {}: {:?}, retrying in {:?}",
                         name, e, reconnect_delay
                     );
+
+                    // CRITICAL: Explicitly disconnect before reconnecting
+                    // This ensures:
+                    // 1. Background read task is aborted (prevents zombie tasks)
+                    // 2. TCP FIN/RST is sent to device (allows device to reset session state)
+                    // 3. v3.4 session keys are properly invalidated
+                    // Without this, devices enter "Bad read from TcpStream" loop
+                    {
+                        device_state.log_event(DeviceEventType::Disconnected).await;
+                        let mut device = tuya_device.write().await;
+                        let _ = device.disconnect().await;
+                    }
 
                     // Wait before reconnecting with exponential backoff
                     tokio::time::sleep(reconnect_delay).await;

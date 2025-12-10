@@ -6,8 +6,27 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# Crypto dependencies (for tuyapi)
+aes = "0.8.3"
+base64 = "0.21"
+ecb = "0.1.2"
+cipher = { version = "0.4.4", features = ["alloc"] }
+hmac = "0.12.1"
+inout = { version = "0.1.3", features = ["block-padding", "std"] }
+md5 = "0.7"
+sha2 = "0.10.7"
+
+# Parsing dependencies (for tuyapi)
+hex = "0.4"
+nom = "7.1"
+num-derive = "0.4"
+num-traits = "0.2"
+once_cell = "1.19"
+thiserror = "1.0"
+
+# Main application dependencies
+chrono = { version = "0.4", features = ["serde"] }
 env_logger = "=0.11.8"
-rust-async-tuyapi = { version = "=1.2.0" }
 tokio = { version = "=1.48.0", features = [
 	"rt",
 	"rt-multi-thread",
@@ -16,6 +35,7 @@ tokio = { version = "=1.48.0", features = [
 	"macros",
 	"sync",
 	"signal",
+	"io-util",
 ] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.145", features = ["preserve_order"] }
@@ -25,4 +45,4 @@ palette = { version = "=0.7.6", features = ["serializing"] }
 log = "=0.4.29"
 futures = "=0.3.31"
 config = "=0.15.19"
-rand = "=0.8.5"
+rand = "=0.9"

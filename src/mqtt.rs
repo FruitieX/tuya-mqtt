@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 
 use anyhow::{Context, Result};
-use rand::{distributions::Alphanumeric, Rng};
+use rand::distr::{Alphanumeric, SampleString};
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -75,11 +75,7 @@ pub struct MqttClient {
 }
 
 pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Result<MqttClient> {
-    let random_string: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(8)
-        .map(char::from)
-        .collect();
+    let random_string: String = Alphanumeric.sample_string(&mut rand::rng(), 8);
 
     let mut options = MqttOptions::new(
         format!("{}-{}", mqtt_config.id.clone(), random_string),

@@ -1,0 +1,176 @@
+//! # Rust Tuyapi
+//! This library can be used to interact with Tuya/Smart Home devices. It utilizes the Tuya
+//! protocol version 3.1 and 3.3 to send and receive messages from the devices.
+
+#![allow(dead_code)]
+
+mod cipher;
+mod crc;
+pub mod error;
+pub mod mesparse;
+pub mod tuyadevice;
+
+use serde::{Deserialize, Serialize};
+
+use std::convert::TryFrom;
+use std::fmt::Display;
+
+use crate::tuyapi::error::ErrorKind;
+use std::convert::TryInto;
+
+pub type Result<T> = std::result::Result<T, ErrorKind>;
+/// The Payload enum represents a payload sent to, and recevied from the Tuya devices. It might be
+/// a struct (ser/de from json) or a plain string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Payload {
+    Struct(PayloadStruct),
+    ControlNewStruct(ControlNewPayload),
+    String(String),
+    Raw(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DpId {
+    Lower,
+    Higher,
+}
+
+impl DpId {
+    fn get_ids(self) -> Vec<u8> {
+        match self {
+            DpId::Lower => vec![4, 5, 6],
+            DpId::Higher => vec![18, 19, 20],
+        }
+    }
+}
+
+impl Payload {
+    pub fn new(
+        dev_id: String,
+        gw_id: Option<String>,
+        uid: Option<String>,
+        t: Option<u32>,
+        dp_id: Option<DpId>,
+        dps: Option<serde_json::Value>,
+    ) -> Payload {
+        Payload::Struct(PayloadStruct {
+            dev_id,
+            gw_id,
+            uid,
+            t: t.map(|t| t.to_string()),
+            dp_id: dp_id.map(DpId::get_ids),
+            dps,
+        })
+    }
+}
+
+impl Display for Payload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Payload::Struct(s) => write!(f, "{}", s),
+            Payload::ControlNewStruct(s) => write!(f, "{}", s),
+            Payload::String(s) => write!(f, "{}", s),
+            Payload::Raw(s) => write!(f, "{}", hex::encode(s)),
+        }
+    }
+}
+
+/// The PayloadStruct is Serialized to json and sent to the device. The dps field contains the
+/// actual commands to set and are device specific.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct PayloadStruct {
+    #[serde(rename = "gwId", skip_serializing_if = "Option::is_none")]
+    pub gw_id: Option<String>,
+    #[serde(rename = "devId")]
+    pub dev_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub t: Option<String>,
+    #[serde(rename = "dpId", skip_serializing_if = "Option::is_none")]
+    pub dp_id: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dps: Option<serde_json::Value>,
+}
+
+/// Protocol v3.4 uses different payloads for ControlNew commands, for example
+/// {"protocol":5,"t":1,"data":{"dps":{"20":false}}}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ControlNewPayload {
+    pub protocol: u32,
+    pub t: u32,
+    pub data: ControlNewPayloadData,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ControlNewPayloadData {
+    pub(crate) dps: serde_json::Value,
+}
+/// This trait is implemented to allow truncated logging of secret data.
+pub trait Truncate {
+    fn truncate(&self) -> Self;
+
+    /// Take the last 5 characters
+    fn truncate_str(text: &str) -> &str {
+        if let Some((i, _)) = text.char_indices().rev().nth(5) {
+            return &text[i..];
+        }
+        text
+    }
+}
+
+impl TryFrom<Vec<u8>> for Payload {
+    type Error = ErrorKind;
+
+    fn try_from(vec: Vec<u8>) -> Result<Self> {
+        match serde_json::from_slice(&vec)? {
+            serde_json::Value::String(s) => Ok(Payload::String(s)),
+            value => Ok(Payload::Struct(serde_json::from_value(value)?)),
+        }
+    }
+}
+impl TryInto<Vec<u8>> for Payload {
+    type Error = ErrorKind;
+
+    fn try_into(self) -> Result<Vec<u8>> {
+        match self {
+            Payload::Struct(s) => Ok(serde_json::to_vec(&s)?),
+            Payload::ControlNewStruct(s) => Ok(serde_json::to_vec(&s)?),
+            Payload::String(s) => Ok(s.as_bytes().to_vec()),
+            Payload::Raw(s) => Ok(s),
+        }
+    }
+}
+
+impl Truncate for PayloadStruct {
+    fn truncate(&self) -> PayloadStruct {
+        PayloadStruct {
+            dev_id: String::from("...") + Self::truncate_str(&self.dev_id),
+            gw_id: self
+                .gw_id
+                .as_ref()
+                .map(|gwid| String::from("...") + Self::truncate_str(gwid)),
+            t: self.t.clone(),
+            dp_id: self.dp_id.clone(),
+            uid: self.uid.clone(),
+            dps: self.dps.clone(),
+        }
+    }
+}
+
+impl Display for PayloadStruct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let full_display = std::env::var("TUYA_FULL_DISPLAY").map_or_else(|_| false, |_| true);
+        if full_display {
+            write!(f, "{}", serde_json::to_string(self).unwrap())
+        } else {
+            write!(f, "{}", serde_json::to_string(&self.truncate()).unwrap())
+        }
+    }
+}
+
+impl Display for ControlNewPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).unwrap())
+    }
+}
