@@ -246,25 +246,33 @@ impl DeviceEventLog {
         eprintln!("{}", separator_dash);
 
         let mut routine_poll_count = 0;
-        let mut routine_heartbeat_skip_count = 0;
+        let mut routine_heartbeat_count = 0; // Includes both sent and skipped
         let mut routine_message_count = 0;
+        let mut routine_throttle_count = 0;
         let mut last_routine_instant: Option<u64> = None;
 
         // Helper to flush routine event summary
         let flush_routine = |poll_count: &mut i32,
-                             hb_skip_count: &mut i32,
+                             hb_count: &mut i32,
                              msg_count: &mut i32,
+                             throttle_count: &mut i32,
                              last_instant: &Option<u64>| {
-            if *poll_count > 0 || *hb_skip_count > 0 {
+            if *poll_count > 0 || *hb_count > 0 || *msg_count > 0 {
                 if let Some(instant) = last_instant {
+                    let throttle_str = if *throttle_count > 0 {
+                        format!(", {} throttled", throttle_count)
+                    } else {
+                        String::new()
+                    };
                     eprintln!(
-                        "       [routine] +{:>8}ms | {} polls, {} heartbeat skips, {} messages OK",
-                        instant, poll_count, hb_skip_count, msg_count
+                        "       [routine] +{:>8}ms | {} polls, {} heartbeats, {} msgs{}",
+                        instant, poll_count, hb_count, msg_count, throttle_str
                     );
                 }
                 *poll_count = 0;
-                *hb_skip_count = 0;
+                *hb_count = 0;
                 *msg_count = 0;
+                *throttle_count = 0;
             }
         };
 
@@ -272,18 +280,24 @@ impl DeviceEventLog {
             let relative_ms = event.instant;
 
             // Determine if this is a "routine" event we should condense
+            // Routine = normal operation that doesn't indicate problems
             let is_routine = matches!(
                 &event.event_type,
                 DeviceEventType::PollSent
                     | DeviceEventType::HeartbeatSkipped { .. }
+                    | DeviceEventType::HeartbeatSent
                     | DeviceEventType::MessageReceived(_)
+                    | DeviceEventType::Throttled { .. }
             );
 
             if is_routine {
                 match &event.event_type {
                     DeviceEventType::PollSent => routine_poll_count += 1,
-                    DeviceEventType::HeartbeatSkipped { .. } => routine_heartbeat_skip_count += 1,
+                    DeviceEventType::HeartbeatSkipped { .. } | DeviceEventType::HeartbeatSent => {
+                        routine_heartbeat_count += 1
+                    }
                     DeviceEventType::MessageReceived(_) => routine_message_count += 1,
+                    DeviceEventType::Throttled { .. } => routine_throttle_count += 1,
                     _ => {}
                 }
                 last_routine_instant = Some(relative_ms);
@@ -291,8 +305,9 @@ impl DeviceEventLog {
                 // Flush any accumulated routine events
                 flush_routine(
                     &mut routine_poll_count,
-                    &mut routine_heartbeat_skip_count,
+                    &mut routine_heartbeat_count,
                     &mut routine_message_count,
+                    &mut routine_throttle_count,
                     &last_routine_instant,
                 );
 
@@ -310,8 +325,9 @@ impl DeviceEventLog {
         // Flush any remaining routine events
         flush_routine(
             &mut routine_poll_count,
-            &mut routine_heartbeat_skip_count,
+            &mut routine_heartbeat_count,
             &mut routine_message_count,
+            &mut routine_throttle_count,
             &last_routine_instant,
         );
 
@@ -324,7 +340,9 @@ impl DeviceEventLog {
                     &e.event_type,
                     DeviceEventType::PollSent
                         | DeviceEventType::HeartbeatSkipped { .. }
+                        | DeviceEventType::HeartbeatSent
                         | DeviceEventType::MessageReceived(_)
+                        | DeviceEventType::Throttled { .. }
                 )
             })
             .collect();
@@ -425,10 +443,17 @@ impl PriorityCommandQueue {
     }
 }
 
+/// Minimum time a device must be failing before we dump its timeline (in milliseconds)
+/// This filters out transient failures that recover quickly
+const FAILURE_DUMP_THRESHOLD_MS: u64 = 60_000;
+
 /// Shared state for activity tracking and throttling
 pub struct DeviceState {
     /// Last time any command was sent to the device (milliseconds since start)
     pub last_command_time: AtomicU64,
+    /// Last time device was successfully connected (milliseconds since start)
+    /// Used to determine if device has been failing long enough to warrant timeline dump
+    pub last_successful_connection: AtomicU64,
     /// Event log for timeline debugging
     pub event_log: Mutex<DeviceEventLog>,
     /// Start instant for monotonic timing
@@ -436,6 +461,8 @@ pub struct DeviceState {
     /// Whether we've already dumped a failure timeline (prevents spam on stuck devices)
     /// Reset when device successfully connects
     pub failure_dumped: std::sync::atomic::AtomicBool,
+    /// Device name for logging
+    pub device_name: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -634,20 +661,65 @@ impl DeviceState {
     pub fn new(device_name: String, device_id: String, device_version: String) -> Self {
         Self {
             last_command_time: AtomicU64::new(0),
-            event_log: Mutex::new(DeviceEventLog::new(device_name, device_id, device_version)),
+            last_successful_connection: AtomicU64::new(0),
+            event_log: Mutex::new(DeviceEventLog::new(
+                device_name.clone(),
+                device_id,
+                device_version,
+            )),
             start_instant: Instant::now(),
             failure_dumped: std::sync::atomic::AtomicBool::new(false),
+            device_name,
         }
     }
 
-    /// Mark that device successfully connected - reset failure dump flag
+    /// Mark that device successfully connected - reset failure state and log recovery if needed
     pub fn mark_connected(&self) {
+        let now = self.elapsed_ms();
+        let last_success = self.last_successful_connection.load(Ordering::Relaxed);
+        let was_failing = self.failure_dumped.load(Ordering::Relaxed);
+
+        // Update last successful connection time
+        self.last_successful_connection
+            .store(now, Ordering::Relaxed);
+
+        // Reset failure dump flag
         self.failure_dumped.store(false, Ordering::Relaxed);
+
+        // If device was previously in failed state, log recovery
+        if was_failing && last_success > 0 {
+            let downtime_ms = now.saturating_sub(last_success);
+            let downtime_secs = downtime_ms / 1000;
+            if downtime_secs >= 60 {
+                eprintln!(
+                    "🟢 {} recovered after {}m {}s of failures",
+                    self.device_name,
+                    downtime_secs / 60,
+                    downtime_secs % 60
+                );
+            } else if downtime_secs >= 5 {
+                eprintln!(
+                    "🟢 {} recovered after {}s of failures",
+                    self.device_name, downtime_secs
+                );
+            }
+        }
     }
 
     /// Check if we should dump timeline for this failure
-    /// Returns true only if we haven't dumped since last successful connection
+    /// Returns true only if:
+    /// 1. We haven't dumped since last successful connection
+    /// 2. Device has been failing for more than FAILURE_DUMP_THRESHOLD_MS
     pub fn should_dump_failure(&self) -> bool {
+        let now = self.elapsed_ms();
+        let last_success = self.last_successful_connection.load(Ordering::Relaxed);
+        let failing_duration = now.saturating_sub(last_success);
+
+        // Only dump if device has been failing for > threshold
+        if failing_duration < FAILURE_DUMP_THRESHOLD_MS {
+            return false;
+        }
+
         // Try to set the flag - only succeeds if it was false
         self.failure_dumped
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
@@ -1195,15 +1267,15 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                 Err(e) => {
                     let error_str = format!("{:?}", e);
 
-                    // Log the error event
+                    // Log the error event to timeline
                     device_state
                         .log_event(DeviceEventType::Error(error_str.clone()))
                         .await;
 
                     // Check if this is a device failure that warrants timeline dump
-                    // Only dump once per failure state - prevents spam on stuck devices
+                    // Only dump if device has been failing for > 1 minute (filters transient issues)
                     if is_device_failure_error(&error_str) && device_state.should_dump_failure() {
-                        // Dump the timeline for debugging (only first failure after connection)
+                        // Dump the timeline for debugging
                         device_state.dump_timeline(&error_str).await;
                     }
 
@@ -1211,13 +1283,37 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
                     if is_transient_error(&error_str) {
                         // Minor issue - reset backoff for quick retry
                         reconnect_delay = Duration::from_millis(INITIAL_RECONNECT_DELAY_MS);
-                        info!("Transient error on {}, retrying quickly", name);
+                        debug!("Transient error on {}, retrying quickly", name);
                     }
 
-                    eprintln!(
-                        "Error while polling {}: {:?}, retrying in {:?}",
-                        name, e, reconnect_delay
-                    );
+                    // Only log errors to stderr if device has been failing for > 1 minute
+                    // This reduces noise from transient network issues
+                    let now = device_state.elapsed_ms();
+                    let last_success = device_state
+                        .last_successful_connection
+                        .load(Ordering::Relaxed);
+                    let failing_duration_ms = now.saturating_sub(last_success);
+
+                    if failing_duration_ms >= FAILURE_DUMP_THRESHOLD_MS {
+                        // Device has been failing for a while - log it
+                        eprintln!(
+                            "🔴 {} failing for {}m {}s: {:?}, retrying in {:?}",
+                            name,
+                            failing_duration_ms / 60_000,
+                            (failing_duration_ms / 1000) % 60,
+                            e,
+                            reconnect_delay
+                        );
+                    } else {
+                        // Transient failure - only debug log
+                        debug!(
+                            "Error on {} (failing {}s): {:?}, retrying in {:?}",
+                            name,
+                            failing_duration_ms / 1000,
+                            e,
+                            reconnect_delay
+                        );
+                    }
 
                     // CRITICAL: Explicitly disconnect before reconnecting
                     // This ensures:
