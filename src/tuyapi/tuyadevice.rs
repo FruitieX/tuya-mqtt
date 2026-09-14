@@ -51,10 +51,10 @@ impl TuyaConnection {
         info!(
             "Writing message to {} ({}):\n",
             self.tcp_write_half.peer_addr()?,
-            &mes
+            mes
         );
         let mut mes = (*mes).clone();
-        if matches!(mes.seq_nr, None) {
+        if mes.seq_nr.is_none() {
             mes.seq_nr = Some(self.seq_id.next_id());
         }
         self.tcp_write_half
@@ -69,7 +69,7 @@ impl TuyaConnection {
 
 async fn tcp_read(tcp_read_half: &mut OwnedReadHalf, mp: &MessageParser) -> Result<Vec<Message>> {
     let mut buf = [0; 4096];
-    
+
     // Read from TCP stream - if we get 0 bytes, connection is closed
     // Don't retry multiple times as this masks connection closure issues
     let bts = tcp_read_half.read(&mut buf).await?;
@@ -137,7 +137,7 @@ impl TuyaDevice {
                 "Writing SessKeyNegStart msg to {} ({}):\n{}",
                 self.addr,
                 connection.seq_id.current(),
-                &start_negotiation_msg
+                start_negotiation_msg
             );
             connection
                 .tcp_write_half
@@ -205,7 +205,7 @@ impl TuyaDevice {
                 "Writing SessKeyNegFinish msg to {} ({}):\n{}",
                 self.addr,
                 connection.seq_id.current(),
-                &session_negotiation_finish_msg
+                session_negotiation_finish_msg
             );
             connection
                 .tcp_write_half
@@ -221,7 +221,7 @@ impl TuyaDevice {
         }
 
         let mp = connection.mp.clone();
-        
+
         // Spawn background read task and store handle for cleanup
         let read_task = tokio::spawn(async move {
             loop {
@@ -354,13 +354,16 @@ impl TuyaDevice {
                 // Give the task a moment to clean up
                 tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             }
-            
+
             // Then shutdown the write half to signal connection close to device
             // This helps v3.4 devices reset their session state properly
             let _ = connection.tcp_write_half.shutdown().await;
-            
-            info!("Disconnected from {} (write shutdown + read task aborted)", self.addr);
-            
+
+            info!(
+                "Disconnected from {} (write shutdown + read task aborted)",
+                self.addr
+            );
+
             // Brief delay to let TCP RST/FIN packets be sent
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
