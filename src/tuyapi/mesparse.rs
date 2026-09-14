@@ -19,12 +19,12 @@ use nom::{
 
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
+use once_cell::sync::Lazy;
 use std::cmp::PartialEq;
 use std::convert::TryInto;
 use std::fmt;
 use std::mem::size_of;
 use std::str::FromStr;
-use once_cell::sync::Lazy;
 
 pub(crate) const UDP_KEY: &str = "yGAdlopoPVldABfn";
 
