@@ -12,7 +12,7 @@ base64 = "=0.23.1"
 ecb = "=0.1.2"
 cipher = { version = "=0.4.4", features = ["alloc"] }
 hmac = "=0.12.1"
-inout = { version = "=0.1.4", features = ["block-padding", "std"] }
+inout = { version = "=0.2.2", features = ["block-padding", "std"] }
 md5 = "=0.8.1"
 sha2 = "=0.10.9"
 
