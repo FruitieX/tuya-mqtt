@@ -22,7 +22,7 @@ nom = "=7.1.3"
 num-derive = "=0.4.2"
 num-traits = "=0.2.19"
 once_cell = "=1.21.4"
-thiserror = "=2.0.17"
+thiserror = "=2.0.20"
 
 # Main application dependencies
 chrono = { version = "=0.4.45", features = ["serde"] }
