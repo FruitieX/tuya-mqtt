@@ -9,7 +9,7 @@ edition = "2021"
 # Crypto dependencies (for tuyapi)
 aes = "=0.8.4"
 base64 = "=0.23.1"
-ecb = "=0.1.2"
+ecb = "=0.2.1"
 cipher = { version = "=0.4.4", features = ["alloc"] }
 hmac = "=0.12.1"
 inout = { version = "=0.1.4", features = ["block-padding", "std"] }
