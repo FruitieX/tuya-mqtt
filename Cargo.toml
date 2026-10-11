@@ -38,7 +38,7 @@ tokio = { version = "=1.53.2", features = [
 	"io-util",
 ] }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = { version = "=1.0.152", features = ["preserve_order"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }
 rumqttc = "=0.25.1"
 anyhow = "=1.0.104"
 palette = { version = "=0.7.7", features = ["serializing"] }
