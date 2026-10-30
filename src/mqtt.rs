@@ -117,12 +117,17 @@ pub async fn init_mqtt(mqtt_config: &MqttConfig, tuya_config: &TuyaConfig) -> Re
                 let res = (|| async move {
                     match notification? {
                         rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_)) => {
-                            client
-                                .subscribe(format!("{}/set", mqtt_config.topic), QoS::AtMostOnce)
-                                .await?;
-
-                            // Subscribe to custom topics asynchronously to avoid blocking the event loop
+                            // Subscribe from a separate task: subscribe() waits for room in the
+                            // request queue, which only this loop drains. Awaiting it here
+                            // deadlocks once device tasks have filled the queue with publishes;
+                            // the loop then stops sending keepalives, the broker drops the
+                            // connection and it is never re-established.
                             task::spawn(async move {
+                                let topic = format!("{}/set", mqtt_config.topic);
+                                if let Err(e) = client.subscribe(&topic, QoS::AtMostOnce).await {
+                                    eprintln!("Could not subscribe to topic {}: {:?}", topic, e);
+                                }
+
                                 for device in tuya_config.devices.values() {
                                     if let Some(topic) = &device.topic {
                                         let res = client
