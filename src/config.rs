@@ -15,6 +15,9 @@ pub struct MqttConfig {
     pub host: String,
     pub port: u16,
     pub topic: String,
+    /// Broker credentials. The client connects anonymously when `username` is unset.
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

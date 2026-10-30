@@ -3,6 +3,10 @@ id = "tuya-mqtt"
 host = "test.mosquitto.org"
 port = 1883
 
+# Optional broker credentials; leave out to connect anonymously
+# username = "example"
+# password = "secret"
+
 # Topic that will be subscribed to. First plus sign will be replaced with device
 # id when publishing device updates.
 topic = "home/lights/tuya/+"
