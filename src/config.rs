@@ -105,13 +105,13 @@ mod tests {
         assert_eq!(mqtt.topic, "home/lights/tuya/+");
         assert_eq!(tuya.devices.len(), 4);
 
-        let device = &tuya.devices["25266020c44f36aa58e7"];
-        assert_eq!(device.id, "25266020c44f36aa58e7");
+        let device = &tuya.devices["bf0000000000000000cccc"];
+        assert_eq!(device.id, "bf0000000000000000cccc");
         assert_eq!(device.version, "3.4");
         assert_eq!(device.local_key.len(), 16);
         assert_eq!(device.topic, None);
         assert_eq!(
-            tuya.devices["25266020c64535ab4217"].topic.as_deref(),
+            tuya.devices["bf0000000000000000dddd"].topic.as_deref(),
             Some("my/custom/topic")
         );
     }
