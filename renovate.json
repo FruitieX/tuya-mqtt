@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "github>FruitieX/renovate-config"
+  ],
+  "packageRules": [
+    {
+      "description": "RustCrypto crates depend on each other's versions and only build when upgraded together",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchSourceUrls": [
+        "https://github.com/RustCrypto/**"
+      ],
+      "groupName": "RustCrypto crates"
+    }
   ]
 }
