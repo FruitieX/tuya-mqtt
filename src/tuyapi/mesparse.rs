@@ -13,8 +13,7 @@ use nom::{
     combinator::{map, peek, recognize},
     multi::{length_data, many1},
     number::complete::be_u32,
-    sequence::tuple,
-    IResult,
+    IResult, Parser,
 };
 
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -301,20 +300,21 @@ impl MessageParser {
 
         // TODO: can this be statically initialized??
         let be_u32_minus4 = map(be_u32, |n: u32| n - 4);
-        let (buf, vec) = many1(tuple((
-            tag(*PREFIX_BYTES),
+        let (buf, vec) = many1((
+            tag(&PREFIX_BYTES[..]),
             be_u32,
             be_u32,
             length_data(be_u32_minus4),
-            tag(*SUFFIX_BYTES),
-        )))(orig_buf)?;
+            tag(&SUFFIX_BYTES[..]),
+        ))
+        .parse(orig_buf)?;
         let mut messages = vec![];
         for (_, seq_nr, command, recv_data, _) in vec {
             // check if the recv_data contains a return code
-            let (recv_data, maybe_retcode) = peek(be_u32)(recv_data)?;
+            let (recv_data, maybe_retcode) = peek(be_u32).parse(recv_data)?;
             let (recv_data, ret_code, ret_len) = if maybe_retcode & 0xFFFF_FF00 == 0 {
                 // Has a return code
-                let (recv_data, ret_code) = recognize(be_u32)(recv_data)?;
+                let (recv_data, ret_code) = recognize(be_u32).parse(recv_data)?;
                 (recv_data, Some(ret_code[3]), 4_usize)
             } else {
                 // Has no return code

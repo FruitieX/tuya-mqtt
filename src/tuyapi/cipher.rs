@@ -1,6 +1,6 @@
 use aes::cipher::block_padding::Pkcs7;
 use base64::Engine;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit as _, Mac};
 use sha2::Sha256;
 
 use crate::tuyapi::mesparse::TuyaVersion;
@@ -41,10 +41,10 @@ impl TuyaCipher {
     }
 
     pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        use aes::cipher::{BlockEncryptMut, KeyInit};
+        use aes::cipher::{BlockModeEncrypt, KeyInit};
 
-        let ct = Aes128EcbEnc::new_from_slice(self.key.as_slice())?
-            .encrypt_padded_vec_mut::<Pkcs7>(data);
+        let ct =
+            Aes128EcbEnc::new_from_slice(self.key.as_slice())?.encrypt_padded_vec::<Pkcs7>(data);
 
         match self.version {
             TuyaVersion::ThreeOne => Ok(base64::engine::general_purpose::STANDARD
@@ -56,7 +56,7 @@ impl TuyaCipher {
     }
 
     pub fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        use aes::cipher::{BlockDecryptMut, KeyInit};
+        use aes::cipher::{BlockModeDecrypt, KeyInit};
 
         // Different header size in version 3.1 and 3.3
         let data = maybe_strip_header(&self.version, data);
@@ -68,7 +68,7 @@ impl TuyaCipher {
         };
 
         let pt = Aes128EcbDec::new_from_slice(self.key.as_slice())?
-            .decrypt_padded_vec_mut::<Pkcs7>(&data)?;
+            .decrypt_padded_vec::<Pkcs7>(&data)?;
 
         Ok(pt.to_vec())
     }

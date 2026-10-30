@@ -8,11 +8,10 @@
 use crate::tuyapi::error::ErrorKind;
 use crate::tuyapi::mesparse::{CommandType, Message, MessageParser, TuyaVersion};
 use crate::tuyapi::{ControlNewPayload, ControlNewPayloadData, Payload, PayloadStruct, Result};
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit};
-use aes::Aes128;
+use aes::cipher::{BlockCipherEncrypt, KeyInit};
+use aes::{Aes128, Block};
 use log::{debug, info};
-use rand::Rng;
+use rand::RngExt;
 use std::net::{IpAddr, SocketAddr};
 use std::time::SystemTime;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -84,6 +83,21 @@ async fn tcp_read(tcp_read_half: &mut OwnedReadHalf, mp: &MessageParser) -> Resu
     }
     mp.parse(&buf[..bts])
 }
+/// Derives the v3.4 session key: the XOR of both nonces, AES-128-ECB
+/// encrypted with the device's local key.
+fn session_key(local_key: &[u8], local_nonce: &[u8; 16], remote_nonce: &[u8]) -> Result<Block> {
+    let cipher = Aes128::new_from_slice(local_key)?;
+
+    let mut block = Block::from(*local_nonce);
+    for (b, r) in block.iter_mut().zip(remote_nonce) {
+        *b ^= r;
+    }
+    debug!("nonce_xor: {}", hex::encode(block));
+
+    cipher.encrypt_block(&mut block);
+    Ok(block)
+}
+
 pub struct TuyaDevice {
     addr: SocketAddr,
     device_id: String,
@@ -167,23 +181,9 @@ impl TuyaDevice {
 
             // Compute session key BEFORE sending FINISH so we can check for 0x00 bug
             // and abort before sending SessKeyNegFinish
-            let nonce_xor: Vec<u8> = local_nonce
-                .iter()
-                .zip(remote_nonce.iter())
-                .map(|(&a, &b)| a ^ b)
-                .collect();
-
-            debug!("nonce_xor: {}", hex::encode(&nonce_xor));
             debug!("using local_key for crypter: {}", hex::encode(&local_key));
-
-            let local_key_arr = GenericArray::from_slice(local_key.as_bytes());
-            let cipher = Aes128::new(local_key_arr);
-
-            let mut nonce_xor = nonce_xor;
-            let block = GenericArray::from_mut_slice(nonce_xor.as_mut_slice());
-            cipher.encrypt_block(block);
-
-            debug!("session key: {}", hex::encode(&block));
+            let block = session_key(local_key.as_bytes(), &local_nonce, remote_nonce)?;
+            debug!("session key: {}", hex::encode(block));
 
             // Known v3.4 bug: if first byte of session key is 0x00, device considers it invalid
             // This causes "Error 914: Check device key or version" and connection failures
