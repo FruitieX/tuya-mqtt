@@ -62,3 +62,7 @@ If both `color` and `cct` are provided in a `/set` message, the `color` paramete
 If both `brightness` and `value` are provided then the final brightness is
 computed by multiplying these together. I suggest always setting `value` to 1
 and adjusting `brightness` instead.
+
+## License
+
+MIT, see [LICENSE](LICENSE). `src/tuyapi/` is adapted from [rust-tuyapi](https://github.com/EmilSodergren/rust-tuyapi) (MIT, Copyright (c) 2017 Emil Södergren), see [src/tuyapi/LICENSE](src/tuyapi/LICENSE).
