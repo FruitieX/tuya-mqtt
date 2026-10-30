@@ -1340,3 +1340,94 @@ pub async fn init_tuya(device_config: TuyaDeviceConfig, mqtt_client: MqttClient)
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tuyapi::mesparse::Message;
+
+    fn device_config() -> TuyaDeviceConfig {
+        TuyaDeviceConfig {
+            name: "Lamp".to_string(),
+            id: "25266020c44f34eb2a95".to_string(),
+            local_key: "0123456789abcdef".to_string(),
+            ip: "192.168.1.48".to_string(),
+            version: "3.3".to_string(),
+            max_brightness: None,
+            power_on_field: None,
+            capabilities: None,
+            topic: None,
+        }
+    }
+
+    fn status_message(dps: Value) -> Vec<Message> {
+        vec![Message {
+            command: Some(CommandType::DpQuery),
+            payload: Payload::Struct(PayloadStruct {
+                dev_id: "25266020c44f34eb2a95".to_string(),
+                gw_id: None,
+                uid: None,
+                t: None,
+                dp_id: None,
+                dps: Some(dps),
+            }),
+            seq_nr: Some(1),
+            ret_code: Some(0),
+        }]
+    }
+
+    #[test]
+    fn plug_status_to_mqtt() {
+        let mut config = device_config();
+        config.power_on_field = Some("1".to_string());
+
+        let device =
+            tuya_to_mqtt(status_message(json!({"1": false, "19": 1234})), &config).unwrap();
+
+        assert_eq!(device.id, "25266020c44f34eb2a95");
+        assert_eq!(device.power, Some(false));
+        assert_eq!(device.color, None);
+        assert_eq!(device.raw, Some(json!({"1": false, "19": 1234})));
+    }
+
+    #[test]
+    fn colour_command_round_trips() {
+        let config = device_config();
+        let command = MqttDevice {
+            id: config.id.clone(),
+            name: None,
+            power: Some(true),
+            brightness: Some(0.5),
+            color: Some(DeviceColor::Hs(Hs { h: 120, s: 0.75 })),
+            transition_ms: None,
+            sensor_value: None,
+            capabilities: None,
+            raw: None,
+        };
+
+        let dps = mqtt_to_tuya(command, &config);
+
+        // The mode field must come last, lamps ignore the colour otherwise
+        assert_eq!(dps.as_object().unwrap().keys().next_back().unwrap(), "21");
+        assert_eq!(dps["24"], json!("007802ee01f4"));
+
+        let device = tuya_to_mqtt(status_message(dps), &config).unwrap();
+        assert_eq!(device.power, Some(true));
+        assert_eq!(device.brightness, Some(0.5));
+        assert_eq!(device.color, Some(DeviceColor::Hs(Hs { h: 120, s: 0.75 })));
+    }
+
+    #[test]
+    fn mqtt_set_message_decodes() {
+        let device: MqttDevice = serde_json::from_str(
+            r#"{"id": "25266020c44f34eb2a95", "power": true, "color": {"ct": 4000}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(device.color, Some(DeviceColor::Ct(Ct { ct: 4000 })));
+
+        let dps = mqtt_to_tuya(device, &device_config());
+        assert_eq!(dps["20"], json!(true));
+        assert_eq!(dps["21"], json!("white"));
+    }
+}

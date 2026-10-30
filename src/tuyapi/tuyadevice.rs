@@ -370,3 +370,24 @@ impl TuyaDevice {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_session_key() {
+        let local_nonce: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let remote_nonce: Vec<u8> = (16..32).collect();
+
+        let key = session_key(b"0123456789abcdef", &local_nonce, &remote_nonce).unwrap();
+
+        // AES-128-ECB(key, local_nonce ^ remote_nonce), computed with openssl
+        assert_eq!(hex::encode(key), "377222e061a924c591cd9c27ea163ed4");
+    }
+
+    #[test]
+    fn session_key_rejects_invalid_local_key() {
+        assert!(session_key(b"short", &[0; 16], &[0; 16]).is_err());
+    }
+}

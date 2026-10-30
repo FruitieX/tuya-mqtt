@@ -102,6 +102,38 @@ impl TuyaCipher {
 mod tests {
     use super::*;
     #[test]
+    fn hmac_sha256() {
+        let cipher = TuyaCipher::create(b"0123456789abcdef", TuyaVersion::ThreeFour);
+
+        // Computed with Python's hmac module
+        assert_eq!(
+            hex::encode(cipher.hmac(b"tuya-mqtt").unwrap()),
+            "33b5177f786085561b81fb6b5740fd7bf71c787b19198ae907aa2315b773eed1"
+        );
+    }
+
+    #[test]
+    fn encrypt_decrypt_round_trip_version_threefour() {
+        let cipher = TuyaCipher::create(b"0123456789abcdef", TuyaVersion::ThreeFour);
+        let data = br#"{"dps":{"1":true}}"#;
+
+        let encrypted = cipher.encrypt(data).unwrap();
+
+        assert_eq!(encrypted.len() % 16, 0);
+        assert_eq!(cipher.decrypt(&encrypted).unwrap(), data);
+    }
+
+    #[test]
+    fn decrypt_with_wrong_key_fails() {
+        let cipher = TuyaCipher::create(b"0123456789abcdef", TuyaVersion::ThreeThree);
+        let other = TuyaCipher::create(b"fedcba9876543210", TuyaVersion::ThreeThree);
+
+        let encrypted = cipher.encrypt(b"some payload").unwrap();
+
+        assert!(other.decrypt(&encrypted).is_err());
+    }
+
+    #[test]
     fn maybe_strip_header_with_correct_header() {
         let cipher = TuyaCipher::create(b"bbe88b3f4106d354", TuyaVersion::ThreeOne);
         let message = b"3.133ed3d4a21effe90zrA8OK3r3JMiUXpXDWauNppY4Am2c8rZ6sb4Yf15MjM8n5ByDx+QWeCZtcrPqddxLrhm906bSKbQAFtT1uCp+zP5AxlqJf5d0Pp2OxyXyjg=";

@@ -49,7 +49,12 @@ pub fn read_config_devices() -> Result<(MqttConfig, TuyaConfig)> {
         std::fs::copy(sample_path, path).unwrap();
     }
 
-    let builder = builder.add_source(config::File::with_name("Settings"));
+    parse_config(builder.add_source(config::File::with_name("Settings")))
+}
+
+fn parse_config(
+    builder: config::ConfigBuilder<config::builder::DefaultState>,
+) -> Result<(MqttConfig, TuyaConfig)> {
     let settings = builder.build()?;
 
     let config: Config = settings.try_deserialize().context(
@@ -81,4 +86,33 @@ pub fn read_config_devices() -> Result<(MqttConfig, TuyaConfig)> {
     let tuya_config = TuyaConfig { devices };
 
     Ok((mqtt_config, tuya_config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_example_config() {
+        let (mqtt, tuya) =
+            parse_config(config::Config::builder().add_source(config::File::from_str(
+                include_str!("../Settings.toml.example"),
+                config::FileFormat::Toml,
+            )))
+            .unwrap();
+
+        assert_eq!(mqtt.id, "tuya-mqtt");
+        assert_eq!(mqtt.topic, "home/lights/tuya/+");
+        assert_eq!(tuya.devices.len(), 4);
+
+        let device = &tuya.devices["25266020c44f36aa58e7"];
+        assert_eq!(device.id, "25266020c44f36aa58e7");
+        assert_eq!(device.version, "3.4");
+        assert_eq!(device.local_key.len(), 16);
+        assert_eq!(device.topic, None);
+        assert_eq!(
+            tuya.devices["25266020c64535ab4217"].topic.as_deref(),
+            Some("my/custom/topic")
+        );
+    }
 }

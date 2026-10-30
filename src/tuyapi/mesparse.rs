@@ -506,7 +506,7 @@ mod tests {
     fn test_parse_double_messages() {
         let packet =
             hex::decode("000055aa00000000000000090000000c00000000b051ab030000aa55000055aa000000000000000a0000000c00000000b051ab030000aa55").unwrap();
-        let expected = vec![
+        let expected = [
             Message {
                 command: Some(CommandType::HeartBeat),
                 payload: Payload::String("".to_string()),
@@ -577,5 +577,51 @@ mod tests {
         let unencrypted = parser.encode(&mes, false).unwrap();
         // Always encrypt 3.3, no matter what the flag is
         assert_eq!(encrypted, unencrypted);
+    }
+
+    #[test]
+    fn test_encode_and_parse_round_trip_version_three_four() {
+        let mut dps = HashMap::new();
+        dps.insert("1".to_string(), json!(true));
+        let mes = Message {
+            command: Some(CommandType::DpQuery),
+            payload: Payload::Struct(PayloadStruct {
+                dev_id: "002004265ccf7fb1b659".to_string(),
+                gw_id: None,
+                uid: None,
+                t: None,
+                dp_id: None,
+                dps: Some(serde_json::to_value(dps).unwrap()),
+            }),
+            seq_nr: Some(42),
+            ret_code: None,
+        };
+        let parser =
+            MessageParser::create(TuyaVersion::ThreeFour, Some("0123456789abcdef".to_string()))
+                .unwrap();
+
+        let encoded = parser.encode(&mes, true).unwrap();
+
+        // HMAC-SHA256 over everything before it, followed by the suffix
+        let hmac_start = encoded.len() - 36;
+        assert_eq!(
+            &encoded[hmac_start..encoded.len() - 4],
+            parser
+                .cipher
+                .hmac(&encoded[..hmac_start])
+                .unwrap()
+                .as_slice()
+        );
+        assert_eq!(&encoded[encoded.len() - 4..], &*SUFFIX_BYTES);
+
+        let messages = parser.parse(&encoded).unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].command, Some(CommandType::DpQuery));
+        assert_eq!(messages[0].seq_nr, Some(42));
+        match &messages[0].payload {
+            Payload::Struct(s) => assert_eq!(s.dps, Some(json!({"1": true}))),
+            other => panic!("unexpected payload {other:?}"),
+        }
     }
 }
