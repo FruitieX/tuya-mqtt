@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 # Crypto dependencies (for tuyapi)
-aes = "=0.9.3"
+aes = "=0.9.4"
 base64 = "=0.23.1"
 ecb = "=0.2.1"
 cipher = { version = "=0.5.2", features = ["alloc", "block-padding"] }
