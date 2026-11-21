@@ -26,7 +26,7 @@ thiserror = "=2.0.21"
 
 # Main application dependencies
 chrono = { version = "=0.4.45", features = ["serde"] }
-env_logger = "=0.11.11"
+env_logger = "=0.11.12"
 tokio = { version = "=1.54.1", features = [
 	"rt",
 	"rt-multi-thread",
