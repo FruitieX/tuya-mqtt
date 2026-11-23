@@ -40,7 +40,7 @@ tokio = { version = "=1.54.1", features = [
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154", features = ["preserve_order"] }
 rumqttc = { version = "=0.25.1", default-features = false }
-anyhow = "=1.0.104"
+anyhow = "=1.0.105"
 palette = { version = "=0.7.7", features = ["serializing"] }
 log = "=0.4.35"
 futures = "=0.3.34"
